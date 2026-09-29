@@ -37,6 +37,7 @@ export interface PromptOptions {
   tools?: ToolSchema[]
   think?: boolean
   temperature?: number
+  numCtx?: number
   onToken?: (channel: Channel, text: string) => void
   onUsage?: (promptTokens: number) => void
   signal?: AbortSignal
@@ -225,7 +226,10 @@ export async function chat(messages: ChatMessage[], options: PromptOptions = {})
     model,
     messages,
     stream: true,
-    options: { temperature: options.temperature ?? 0.2 }
+    options: {
+      temperature: options.temperature ?? 0.2,
+      ...(options.numCtx && options.numCtx > 0 ? { num_ctx: options.numCtx } : {})
+    }
   }
   if (options.think) body.think = true
   if (options.tools) body.tools = options.tools

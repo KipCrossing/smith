@@ -2,14 +2,14 @@ import type { AgentEvent, AgentPromptSettings, AgentRequest, AgentResult, AgentT
 import { record } from './history'
 import type { ChatMessage } from './ollama'
 import { chat } from './ollama'
-import { contextLimit, instructionText, measureContext, notePromptUsage } from './budget'
+import { contextLimit, instructionText, measureContext, notePromptUsage, tokenCount } from './budget'
 import { contextPrompt } from './context'
 import { projectPrompt, refreshProjectIndex } from './projectIndex'
 import { stat } from 'fs/promises'
 import { appendSessionTurns, applySessionFileEdits, beginSessionWrite, readSessionFiles, readTurns, type SessionFileEdit } from './sessions'
 import { Toolset, openWorkspace, type Workspace } from './tools'
 
-const MAX_STEPS = 25
+const MAX_STEPS = 50
 
 type Emit = (event: AgentEvent) => void
 
@@ -116,19 +116,22 @@ async function loop(
     emit({ type: 'step', index: step, total: MAX_STEPS })
     emit({ type: 'clear-content' })
     emit({ type: 'status', text: stepStatus(step, 0) })
+    const fitted = fitForWindow(messages, schemas, model, limit)
+    if (fitted.trimmed) emit({ type: 'status', text: stepStatus(step, 0, 'trimmed earlier results') })
     let stepTokens = 0
     let message: ChatMessage
     try {
-      message = await chat(messages, {
+      message = await chat(fitted.messages, {
         model,
         tools: schemas,
         think,
         temperature: 0.2,
+        numCtx: limit > 0 ? limit : undefined,
         signal,
         onToken: (channel, text) => emit({ type: 'token', channel, text }),
         onUsage: (promptTokens) => {
           stepTokens = promptTokens
-          notePromptUsage(model, promptCharacters(messages, schemas), promptTokens)
+          notePromptUsage(model, promptCharacters(fitted.messages, schemas), promptTokens)
         }
       })
     } catch (error) {
@@ -312,6 +315,105 @@ function stepStatus(step: number, tokens: number, detail?: string): string {
   const head = `Step ${step} of ${MAX_STEPS}`
   const sized = tokens > 0 ? `${head} · ${tokens.toLocaleString('en-US')} tokens` : head
   return detail ? `${sized} · ${detail}` : sized
+}
+
+const REPLY_RESERVE = 4096
+
+function fitForWindow(
+  messages: ChatMessage[],
+  schemas: unknown,
+  model: string,
+  limit: number
+): { messages: ChatMessage[]; trimmed: boolean } {
+  const copy = messages.map((message) => ({ ...message }))
+  for (const message of copy) delete message.thinkingSeconds
+  if (limit <= 0) return { messages: copy, trimmed: false }
+  const budget = Math.max(1024, limit - REPLY_RESERVE)
+  if (messageTokens(copy, schemas, model) <= budget) return { messages: copy, trimmed: false }
+
+  let trimmed = false
+  const lastAssistant = findLastIndex(copy, (message) => message.role === 'assistant')
+  for (let index = 0; index < copy.length; index += 1) {
+    if (copy[index].role !== 'assistant' || index === lastAssistant || !copy[index].thinking) continue
+    delete copy[index].thinking
+    trimmed = true
+  }
+  if (messageTokens(copy, schemas, model) <= budget) return { messages: copy, trimmed }
+
+  const recentTools = latestToolIndexes(copy)
+  for (const index of toolIndexes(copy)) {
+    if (recentTools.has(index) || messageTokens(copy, schemas, model) <= budget) continue
+    if (copy[index].content.startsWith('(earlier result omitted')) continue
+    copy[index].content = '(earlier result omitted to fit the context window)'
+    trimmed = true
+  }
+  for (const max of [8000, 4000, 2000, 800]) {
+    if (messageTokens(copy, schemas, model) <= budget) break
+    for (const index of toolIndexes(copy)) {
+      if (messageTokens(copy, schemas, model) <= budget) break
+      if (copy[index].content.length <= max) continue
+      copy[index].content = `${copy[index].content.slice(0, max)}\n…(trimmed to fit the context window)`
+      trimmed = true
+    }
+  }
+  while (messageTokens(copy, schemas, model) > budget) {
+    if (!dropOldestExchange(copy)) break
+    trimmed = true
+  }
+  return { messages: copy, trimmed }
+}
+
+function messageTokens(messages: ChatMessage[], schemas: unknown, model: string): number {
+  const chars = promptCharacters(messages, schemas)
+  if (chars <= 0) return 0
+  return tokenCount('x'.repeat(chars), model).tokens
+}
+
+function toolIndexes(messages: ChatMessage[]): number[] {
+  const indexes: number[] = []
+  messages.forEach((message, index) => {
+    if (message.role === 'tool') indexes.push(index)
+  })
+  return indexes
+}
+
+function latestToolIndexes(messages: ChatMessage[]): Set<number> {
+  const kept = new Set<number>()
+  let start = -1
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === 'assistant') {
+      start = index + 1
+      break
+    }
+  }
+  if (start < 0) return kept
+  for (let index = start; index < messages.length; index += 1) {
+    if (messages[index].role === 'tool') kept.add(index)
+  }
+  return kept
+}
+
+function dropOldestExchange(messages: ChatMessage[]): boolean {
+  let first = -1
+  let last = -1
+  messages.forEach((message, index) => {
+    if (message.role !== 'assistant') return
+    if (first < 0) first = index
+    last = index
+  })
+  if (first < 0 || first === last) return false
+  let end = first + 1
+  while (end < messages.length && messages[end].role === 'tool') end += 1
+  if (messages.slice(first, end).some((message) => message.role === 'user' || message.role === 'system')) return false
+  messages.splice(first, end - first)
+  return true
+}
+
+function findLastIndex(messages: ChatMessage[], match: (message: ChatMessage) => boolean): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (match(messages[index])) return index
+  }
+  return -1
 }
 
 function promptCharacters(messages: ChatMessage[], schemas: unknown): number {
