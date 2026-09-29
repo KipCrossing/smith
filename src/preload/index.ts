@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { AgentEvent, AgentPromptSettings, EditorApi, MenuAction, ModelPullProgress } from '../shared/types'
+import type { AgentEvent, AgentPromptSettings, EditorApi, MenuAction, ModelPullProgress, VoiceProgress } from '../shared/types'
 
 const api: EditorApi = {
   openFolder: () => ipcRenderer.invoke('dialog:open-folder'),
@@ -57,6 +57,17 @@ const api: EditorApi = {
     const listener = (_event: unknown, progress: ModelPullProgress): void => callback(progress)
     ipcRenderer.on('agent:pull-progress', listener)
     return () => ipcRenderer.removeListener('agent:pull-progress', listener)
+  },
+  voiceStatus: () => ipcRenderer.invoke('voice:status'),
+  downloadVoice: (id) => ipcRenderer.invoke('voice:download', id),
+  cancelVoiceDownload: () => ipcRenderer.invoke('voice:cancel'),
+  transcribe: (wav) => ipcRenderer.invoke('voice:transcribe', wav),
+  speak: (text) => ipcRenderer.invoke('voice:speak', text),
+  stopSpeaking: () => ipcRenderer.invoke('voice:stop-speaking'),
+  onVoiceProgress: (callback) => {
+    const listener = (_event: unknown, progress: VoiceProgress): void => callback(progress)
+    ipcRenderer.on('voice:progress', listener)
+    return () => ipcRenderer.removeListener('voice:progress', listener)
   },
   listAgentSessions: (root) => ipcRenderer.invoke('agent:sessions', root),
   readAgentSession: (root, id) => ipcRenderer.invoke('agent:session-read', root, id),

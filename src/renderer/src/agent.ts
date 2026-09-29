@@ -1,4 +1,4 @@
-import type { AgentContextFile, AgentContextNote, AgentPromptSettings, AgentSessionInfo, AgentSessionState, AgentThought, AgentToolUse, AgentTrace, AgentTurn, ContextBudget, ContextSlice, ModelPullProgress } from '../../shared/types'
+import type { AgentContextFile, AgentContextNote, AgentPromptSettings, AgentSessionInfo, AgentSessionState, AgentThought, AgentToolUse, AgentTrace, AgentTurn, ContextBudget, ContextSlice, ModelPullProgress, VoiceId, VoicePackage, VoiceProgress } from '../../shared/types'
 import { DEFAULT_AGENT_MODEL } from '../../shared/types'
 import { referenceDetail, referenceLabel, type TextReference } from './references'
 
@@ -7,6 +7,7 @@ const MODEL_KEY = 'smith.agent.model'
 const THINK_KEY = 'smith.agent.think'
 const EXTRA_KEY = 'smith.agent.extra'
 const CAVEMAN_KEY = 'smith.agent.caveman'
+const READER_KEY = 'smith.agent.reader'
 const sources = new WeakMap<HTMLElement, string>()
 
 type Part =
@@ -69,6 +70,7 @@ export function mountAgent(
               <circle class="agent-wheel-value" cx="8" cy="8" r="6"></circle>
             </svg>
           </button>
+          <button class="agent-mic" type="button" hidden title="Record" aria-label="Record" aria-pressed="false">${micIcon()}</button>
           <button class="agent-attach" type="button" hidden title="Attach an image" aria-label="Attach an image">${attachIcon()}</button>
           <button class="agent-send" type="submit" aria-label="Send" title="Send">${sendIcon()}</button>
         </div>
@@ -99,6 +101,27 @@ export function mountAgent(
             </div>
           </div>
           <p class="agent-pull-note"></p>
+        </section>
+        <section class="agent-settings-section voice-section">
+          <h2>Voice</h2>
+          <div class="voice-list"></div>
+          <div class="voice-track" hidden>
+            <div class="agent-pull-bar" aria-hidden="true"><span class="agent-pull-fill voice-fill"></span></div>
+            <div class="agent-pull-meta">
+              <span class="voice-status"></span>
+              <button class="agent-pull-cancel voice-cancel" type="button">Cancel</button>
+            </div>
+          </div>
+          <p class="voice-note"></p>
+          <p class="agent-settings-note">Whisper turns speech into text. Piper reads text aloud. Both are downloaded once and kept on this computer.</p>
+        </section>
+        <section class="agent-settings-section">
+          <h2>Reader</h2>
+          <label class="agent-check">
+            <input class="reader-auto" type="checkbox" disabled />
+            Auto
+          </label>
+          <p class="agent-settings-note">When Auto is on, Piper reads the reply at the end of a run. Code blocks and markdown are left out.</p>
         </section>
         <section class="agent-settings-section">
           <h2>Context</h2>
@@ -136,6 +159,7 @@ export function mountAgent(
   const wheelRing = host.querySelector('.agent-wheel-value')
   if (!(wheelRing instanceof SVGCircleElement)) throw new Error('Missing .agent-wheel-value')
   const wheelValue: SVGCircleElement = wheelRing
+  const micButton = must(host, '.agent-mic') as HTMLButtonElement
   const attachButton = must(host, '.agent-attach') as HTMLButtonElement
   const thinkButton = must(host, '.agent-think') as HTMLButtonElement
   const pullForm = must(host, '.agent-pull-form') as HTMLFormElement
@@ -147,6 +171,14 @@ export function mountAgent(
   const pullStatus = must(host, '.agent-pull-status')
   const pullCancel = must(host, '.agent-pull-cancel') as HTMLButtonElement
   const pullNote = must(host, '.agent-pull-note')
+  const voiceSection = must(host, '.voice-section')
+  const voiceList = must(voiceSection, '.voice-list')
+  const voiceTrack = must(voiceSection, '.voice-track')
+  const voiceFill = must(voiceSection, '.voice-fill')
+  const voiceStatusEl = must(voiceSection, '.voice-status')
+  const voiceCancel = must(voiceSection, '.voice-cancel') as HTMLButtonElement
+  const voiceNote = must(voiceSection, '.voice-note')
+  const readerAuto = must(host, '.reader-auto') as HTMLInputElement
   const stopButton = must(host, '.agent-stop') as HTMLButtonElement
   const clearButton = must(host, '.agent-clear') as HTMLButtonElement
   const newButton = must(host, '.agent-new') as HTMLButtonElement
@@ -164,6 +196,19 @@ export function mountAgent(
   let pulling = false
   let pullingName = ''
   let pullToken = 0
+  let voicePackages: VoicePackage[] = []
+  let voiceBusy = false
+  let voiceDownloading: VoiceId | '' = ''
+  let voiceLoad = 0
+  let voiceToken = 0
+  let recording = false
+  let transcribing = false
+  let startingMic = false
+  let capture: MediaRecorder | null = null
+  let captureStream: MediaStream | null = null
+  let recordTimer = 0
+  let readToken = 0
+  let playback: HTMLAudioElement | null = null
   let sessionId = ''
   let sessionToken = 0
   let contextFiles: AgentContextFile[] = []
@@ -173,6 +218,7 @@ export function mountAgent(
   let instructionLoad = 0
   extraInput.value = localStorage.getItem(EXTRA_KEY) ?? ''
   cavemanToggle.checked = localStorage.getItem(CAVEMAN_KEY) === '1'
+  readerAuto.checked = localStorage.getItem(READER_KEY) === '1'
   contextList.addEventListener('click', (event) => {
     const target = event.target
     const button = target instanceof HTMLElement ? target.closest('.agent-context-remove') : null
@@ -180,7 +226,12 @@ export function mountAgent(
     void removeContextFile(button.dataset.path)
   })
   stopButton.addEventListener('click', () => {
+    silenceReader()
     if (busy) void window.api.stopAgent()
+  })
+  readerAuto.addEventListener('change', () => {
+    localStorage.setItem(READER_KEY, readerAuto.checked ? '1' : '0')
+    if (!readerAuto.checked) silenceReader()
   })
   clearButton.addEventListener('click', () => {
     void clearChat()
@@ -256,7 +307,18 @@ export function mountAgent(
     if (progress.model !== pullingName) return
     paintPull(progress)
   })
+  voiceCancel.addEventListener('click', () => {
+    void window.api.cancelVoiceDownload()
+  })
+  window.api.onVoiceProgress((progress) => {
+    if (progress.id !== voiceDownloading) return
+    paintVoiceProgress(progress)
+  })
+  micButton.addEventListener('click', () => {
+    void toggleMic()
+  })
   void reloadModels()
+  void loadVoice()
 
   form.addEventListener('submit', (event) => {
     event.preventDefault()
@@ -271,6 +333,9 @@ export function mountAgent(
     } else if (event.key === 'Delete') {
       if (deleteAdjacent(input, false)) event.preventDefault()
     }
+  })
+  input.addEventListener('input', () => {
+    clearVoiceError()
   })
   input.addEventListener('paste', (event) => {
     event.preventDefault()
@@ -302,7 +367,11 @@ export function mountAgent(
   }
 
   function send(): void {
-    if (busy) return
+    if (recording) {
+      stopCapture()
+      return
+    }
+    if (busy || transcribing) return
     const parts = partsFrom(input)
     if (!parts.some((part) => part.type === 'ref' || part.text.trim())) return
     const project = context.project()
@@ -377,6 +446,8 @@ export function mountAgent(
     file: string | null,
     view: { trail: HTMLElement; thinking: HTMLElement; status: HTMLElement; live: HTMLElement; replyBody: HTMLElement }
   ): Promise<void> {
+    silenceReader()
+    const speechGeneration = readToken
     setBusy(true)
     let answer = ''
     let thought = ''
@@ -402,6 +473,9 @@ export function mountAgent(
       rendered.className = 'agent-md'
       renderMarkdown(rendered, finalText)
       view.replyBody.append(rendered)
+      const speak = speakerButton(finalText)
+      view.replyBody.append(speak)
+      if (speechGeneration === readToken) void readAloud(finalText, speechGeneration, false, speak)
     }
     const stop = window.api.onAgentEvent((event) => {
       if (event.type === 'status') view.status.textContent = event.text
@@ -534,6 +608,287 @@ export function mountAgent(
     }
   }
 
+  function paintVoice(): void {
+    voiceList.replaceChildren()
+    for (const item of voicePackages) {
+      const row = document.createElement('div')
+      row.className = 'voice-row'
+      const text = document.createElement('div')
+      const name = document.createElement('div')
+      name.className = 'voice-name'
+      name.textContent = item.name
+      const detail = document.createElement('div')
+      detail.className = 'voice-detail'
+      detail.textContent = item.detail
+      text.append(name, detail)
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'voice-download'
+      button.dataset.voice = item.id
+      if (item.installed) button.textContent = 'Installed'
+      else if (!item.available) button.textContent = 'Unavailable'
+      else button.textContent = 'Download'
+      button.disabled = item.installed || !item.available || voiceBusy
+      button.addEventListener('click', () => {
+        void startVoice(item.id)
+      })
+      row.append(text, button)
+      voiceList.append(row)
+    }
+    paintMicState()
+    paintReader()
+  }
+
+  function paintReader(): void {
+    const installed = voicePackages.some((item) => item.id === 'piper' && item.installed)
+    readerAuto.disabled = !installed
+    readerAuto.title = installed ? 'Read each reply aloud when the run finishes' : 'Download Piper to turn this on'
+  }
+
+  function silenceReader(): void {
+    readToken += 1
+    stopPlayback()
+  }
+
+  function stopPlayback(): void {
+    playback?.pause()
+    if (playback) {
+      playback.src = ''
+      playback = null
+    }
+    for (const button of log.querySelectorAll('.agent-speak.reading')) {
+      if (button instanceof HTMLButtonElement) setSpeaking(button, false)
+    }
+    void window.api.stopSpeaking()
+  }
+
+  function speakerButton(markdown: string): HTMLButtonElement {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'agent-speak'
+    button.title = 'Read aloud'
+    button.setAttribute('aria-label', 'Read aloud')
+    button.setAttribute('aria-pressed', 'false')
+    button.innerHTML = speakerIcon()
+    button.addEventListener('click', () => {
+      const reading = button.classList.contains('reading')
+      silenceReader()
+      if (!reading) void readAloud(markdown, readToken, true, button)
+    })
+    return button
+  }
+
+  function setSpeaking(button: HTMLButtonElement, on: boolean): void {
+    button.classList.toggle('reading', on)
+    button.title = on ? 'Stop reading' : 'Read aloud'
+    button.setAttribute('aria-label', on ? 'Stop reading' : 'Read aloud')
+    button.setAttribute('aria-pressed', on ? 'true' : 'false')
+  }
+
+  async function readAloud(markdown: string, generation: number, force: boolean, button?: HTMLButtonElement): Promise<void> {
+    if (generation !== readToken) return
+    if (!force && !readerAuto.checked) return
+    if (!voicePackages.some((item) => item.id === 'piper' && item.installed)) return
+    const spoken = spokenText(markdown)
+    if (!spoken) return
+    if (button) setSpeaking(button, true)
+    try {
+      const wav = await window.api.speak(spoken)
+      if (generation !== readToken) return
+      const blob = new Blob([wav], { type: 'audio/wav' })
+      const url = URL.createObjectURL(blob)
+      const audio = new Audio(url)
+      playback = audio
+      audio.addEventListener('ended', () => {
+        URL.revokeObjectURL(url)
+        if (playback === audio) playback = null
+        if (generation === readToken && button) setSpeaking(button, false)
+      })
+      await audio.play()
+    } catch {
+      if (generation === readToken && button) setSpeaking(button, false)
+    }
+  }
+
+  function paintMicState(): void {
+    const installed = voicePackages.some((item) => item.id === 'whisper' && item.installed)
+    micButton.hidden = !installed
+    micButton.classList.toggle('recording', recording)
+    micButton.disabled = transcribing || startingMic
+    micButton.setAttribute('aria-pressed', recording ? 'true' : 'false')
+    if (transcribing) {
+      micButton.title = 'Transcribing'
+      micButton.setAttribute('aria-label', 'Transcribing')
+    } else if (recording) {
+      micButton.title = 'Stop recording'
+      micButton.setAttribute('aria-label', 'Stop recording')
+    } else {
+      micButton.title = 'Record'
+      micButton.setAttribute('aria-label', 'Record')
+    }
+  }
+
+  async function toggleMic(): Promise<void> {
+    if (transcribing || startingMic) return
+    if (recording) {
+      stopCapture()
+      return
+    }
+    startingMic = true
+    clearVoiceError()
+    paintMicState()
+    try {
+      await beginCapture()
+    } catch (error) {
+      showVoiceError(micErrorText(error))
+    } finally {
+      startingMic = false
+      paintMicState()
+    }
+  }
+
+  async function beginCapture(): Promise<void> {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : ''
+    const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream)
+    const chunks: Blob[] = []
+    recorder.addEventListener('dataavailable', (event) => {
+      if (event.data.size > 0) chunks.push(event.data)
+    })
+    recorder.addEventListener('stop', () => {
+      capture = null
+      captureStream?.getTracks().forEach((track) => track.stop())
+      captureStream = null
+      void finishCapture(new Blob(chunks, { type: recorder.mimeType || 'audio/webm' }))
+    })
+    captureStream = stream
+    capture = recorder
+    recording = true
+    try {
+      recorder.start()
+    } catch (error) {
+      recording = false
+      capture = null
+      captureStream = null
+      stream.getTracks().forEach((track) => track.stop())
+      throw error
+    }
+    recordTimer = window.setTimeout(() => stopCapture(), 90_000)
+    paintMicState()
+  }
+
+  function stopCapture(): void {
+    window.clearTimeout(recordTimer)
+    recording = false
+    if (capture && capture.state !== 'inactive') capture.stop()
+    paintMicState()
+  }
+
+  async function finishCapture(blob: Blob): Promise<void> {
+    transcribing = true
+    input.classList.add('voice-busy')
+    paintMicState()
+    try {
+      if (blob.size < 800) throw new Error('The recording was too short.')
+      const wav = await wavFromBlob(blob)
+      const text = await window.api.transcribe(wav)
+      insertTranscript(text)
+    } catch (error) {
+      showVoiceError(micErrorText(error))
+    } finally {
+      transcribing = false
+      input.classList.remove('voice-busy')
+      paintMicState()
+    }
+  }
+
+  function insertTranscript(text: string): void {
+    clearVoiceError()
+    const current = input.textContent ?? ''
+    const prefix = current.trim() && !/\s$/.test(current) ? ' ' : ''
+    insertPaste(input, `${prefix}${text}`, null)
+    input.focus()
+  }
+
+  function showVoiceError(message: string): void {
+    input.dataset.voiceError = message
+    input.classList.add('voice-error')
+    micButton.title = message
+  }
+
+  function clearVoiceError(): void {
+    input.classList.remove('voice-error')
+    delete input.dataset.voiceError
+    if (!recording && !transcribing) paintMicState()
+  }
+
+  function setVoiceBusy(active: boolean): void {
+    voiceBusy = active
+    voiceTrack.hidden = !active
+    voiceCancel.disabled = !active
+    if (!active) {
+      voiceFill.style.width = '0'
+      voiceFill.classList.remove('indeterminate')
+    }
+    paintVoice()
+  }
+
+  async function loadVoice(): Promise<void> {
+    const token = ++voiceLoad
+    try {
+      const packages = await window.api.voiceStatus()
+      if (token !== voiceLoad) return
+      voicePackages = packages
+      paintVoice()
+    } catch (error) {
+      if (token !== voiceLoad) return
+      voiceNote.textContent = pullErrorText(error)
+      voiceNote.className = 'voice-note error'
+    }
+  }
+
+  async function startVoice(id: VoiceId): Promise<void> {
+    if (voiceBusy) return
+    const item = voicePackages.find((entry) => entry.id === id)
+    if (!item || item.installed || !item.available) return
+    const token = ++voiceToken
+    voiceDownloading = id
+    voiceNote.textContent = ''
+    voiceNote.className = 'voice-note'
+    voiceStatusEl.textContent = `Starting ${item.name}`
+    voiceFill.style.width = '0'
+    voiceFill.classList.add('indeterminate')
+    setVoiceBusy(true)
+    try {
+      await window.api.downloadVoice(id)
+      if (token !== voiceToken) return
+      await loadVoice()
+      if (token !== voiceToken) return
+      voiceNote.textContent = `Installed ${item.name}.`
+      voiceNote.className = 'voice-note ok'
+    } catch (error) {
+      if (token !== voiceToken) return
+      const message = pullErrorText(error)
+      const cancelled = message === 'Download cancelled.'
+      voiceNote.textContent = cancelled ? 'Download cancelled.' : message
+      voiceNote.className = cancelled ? 'voice-note' : 'voice-note error'
+    } finally {
+      if (token === voiceToken) {
+        voiceDownloading = ''
+        setVoiceBusy(false)
+      }
+    }
+  }
+
+  function paintVoiceProgress(progress: VoiceProgress): void {
+    const known = progress.total > 0
+    voiceFill.classList.toggle('indeterminate', !known)
+    voiceFill.style.width = known ? `${Math.min(100, Math.round((progress.completed / progress.total) * 100))}%` : ''
+    const amount = known ? `${formatPullBytes(progress.completed)} / ${formatPullBytes(progress.total)}` : ''
+    const label = progress.status || 'Downloading'
+    voiceStatusEl.textContent = amount ? `${label} · ${amount}` : label
+  }
+
   function paintPull(progress: ModelPullProgress): void {
     const known = progress.total > 0
     pullFill.classList.toggle('indeterminate', !known)
@@ -638,6 +993,7 @@ export function mountAgent(
     if (!contextBody.childElementCount && !contextBody.textContent) contextBody.textContent = 'Counting tokens…'
     void loadInstructions(context.project())
     void refreshBudget()
+    void loadVoice()
   }
 
   function closeSettings(): void {
@@ -809,7 +1165,7 @@ export function mountAgent(
         const rendered = document.createElement('div')
         rendered.className = 'agent-md'
         renderMarkdown(rendered, next.content)
-        replyBody.append(rendered)
+        replyBody.append(rendered, speakerButton(next.content))
         reply.append(roleLabel('Agent'), replyBody)
         exchange.append(reply)
         index += 2
@@ -896,6 +1252,108 @@ const SUGGESTED_MODELS = [
 
 function sendIcon(): string {
   return `<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 4.2 5.2 11l1.4 1.4L11 7.9V19.5h2V7.9l4.4 4.5 1.4-1.4L12 4.2z"/></svg>`
+}
+
+function spokenText(markdown: string): string {
+  let text = markdown.replace(/\r\n/g, '\n')
+  text = text.replace(/```[\s\S]*?```/g, ' ')
+  text = text.replace(/```[\s\S]*$/g, ' ')
+  text = text.replace(/<[^>]+>/g, ' ')
+  text = text.replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+  text = text.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+  text = text.replace(/^#{1,6}\s+/gm, '')
+  text = text.replace(/^>\s?/gm, '')
+  text = text.replace(/^([-*_])\1{2,}\s*$/gm, ' ')
+  text = text.replace(/^\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/gm, ' ')
+  text = text.replace(/\|/g, ' ')
+  text = text.replace(/^\s*[-*+]\s+/gm, '')
+  text = text.replace(/^\s*\d+[.)]\s+/gm, '')
+  text = text.replace(/\*\*|__|~~/g, '')
+  text = text.replace(/(^|[^\*])\*([^*\n]+)\*(?!\*)/g, '$1$2')
+  text = text.replace(/`([^`]+)`/g, '$1')
+  text = text.replace(/`/g, '')
+  text = text.replace(/[ \t]+\n/g, '\n').replace(/\n{2,}/g, '\n').replace(/[ \t]{2,}/g, ' ')
+  const spoken = text.trim()
+  if (spoken.length <= 8000) return spoken
+  const slice = spoken.slice(0, 8000)
+  const end = Math.max(slice.lastIndexOf('. '), slice.lastIndexOf('? '), slice.lastIndexOf('! '))
+  return (end > 200 ? slice.slice(0, end + 1) : slice).trim()
+}
+
+function speakerIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M4.5 9.5h3.2L12 6.2v11.6l-4.3-3.3H4.5v-5zM15.2 9.2a3.2 3.2 0 0 1 0 5.6M17.4 7a6 6 0 0 1 0 10"/></svg>`
+}
+
+function micIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 3.5a2.8 2.8 0 0 0-2.8 2.8v5.2a2.8 2.8 0 0 0 5.6 0V6.3A2.8 2.8 0 0 0 12 3.5zM6.5 11.2a5.5 5.5 0 0 0 11 0M12 16.7V20.5"/></svg>`
+}
+
+function micErrorText(error: unknown): string {
+  if (error instanceof DOMException) {
+    if (error.name === 'NotAllowedError' || error.name === 'SecurityError') return 'Microphone permission was denied.'
+    if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') return 'No microphone was found.'
+    if (error.name === 'NotReadableError') return 'The microphone is in use by another app.'
+  }
+  return pullErrorText(error)
+}
+
+async function wavFromBlob(blob: Blob): Promise<ArrayBuffer> {
+  const bytes = await blob.arrayBuffer()
+  const audio = new AudioContext()
+  try {
+    const decoded = await audio.decodeAudioData(bytes.slice(0))
+    return encodeWav(resampleMono(decoded, 16000), 16000)
+  } catch {
+    throw new Error('Could not read that recording.')
+  } finally {
+    await audio.close()
+  }
+}
+
+function resampleMono(buffer: AudioBuffer, sampleRate: number): Int16Array {
+  const channels = buffer.numberOfChannels
+  const length = buffer.length
+  if (length === 0 || channels === 0) return new Int16Array()
+  const mono = new Float32Array(length)
+  for (let i = 0; i < length; i++) {
+    let sum = 0
+    for (let channel = 0; channel < channels; channel++) sum += buffer.getChannelData(channel)[i]
+    mono[i] = sum / channels
+  }
+  const outLength = Math.max(1, Math.round(length * sampleRate / buffer.sampleRate))
+  const pcm = new Int16Array(outLength)
+  for (let i = 0; i < outLength; i++) {
+    const position = i * buffer.sampleRate / sampleRate
+    const left = Math.floor(position)
+    const right = Math.min(left + 1, length - 1)
+    const mix = mono[left] * (1 - (position - left)) + mono[right] * (position - left)
+    const clamped = Math.max(-1, Math.min(1, mix))
+    pcm[i] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff
+  }
+  return pcm
+}
+
+function encodeWav(samples: Int16Array, sampleRate: number): ArrayBuffer {
+  const buffer = new ArrayBuffer(44 + samples.length * 2)
+  const view = new DataView(buffer)
+  const write = (offset: number, text: string): void => {
+    for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i))
+  }
+  write(0, 'RIFF')
+  view.setUint32(4, 36 + samples.length * 2, true)
+  write(8, 'WAVE')
+  write(12, 'fmt ')
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, 1, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, sampleRate * 2, true)
+  view.setUint16(32, 2, true)
+  view.setUint16(34, 16, true)
+  write(36, 'data')
+  view.setUint32(40, samples.length * 2, true)
+  for (let i = 0; i < samples.length; i++) view.setInt16(44 + i * 2, samples[i], true)
+  return buffer
 }
 
 function attachIcon(): string {

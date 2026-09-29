@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, session, shell } from 'electron'
 import { readFile, writeFile } from 'fs/promises'
 import { join } from 'path'
 import {
@@ -21,6 +21,7 @@ import { gitChangeDiff, gitCommit, gitDiff, gitGutter, gitStage, gitStatus, gitU
 import { replaceFolder, searchFolder } from './search'
 import { startTerminal, stopAllTerminals, stopTerminal, writeTerminal } from './terminal'
 import { listModels, pullModel } from './agent/ollama'
+import { downloadVoice, speakText, stopSpeaking, stopWhisper, transcribeWav, voiceStatus, warmWhisper } from './agent/voice'
 import { measureContext } from './agent/budget'
 import { promptPreview } from './agent/prompt'
 import { refreshProjectIndex } from './agent/projectIndex'
@@ -292,6 +293,39 @@ function registerIpc(): void {
   ipcMain.handle('agent:pull-cancel', (event) => {
     pulls.get(event.sender.id)?.abort()
   })
+  const voiceDownloads = new Map<number, AbortController>()
+  ipcMain.handle('voice:status', () => voiceStatus())
+  ipcMain.handle('voice:download', async (event, id: unknown) => {
+    if (id !== 'whisper' && id !== 'piper') throw new Error('Unknown voice.')
+    voiceDownloads.get(event.sender.id)?.abort()
+    const controller = new AbortController()
+    voiceDownloads.set(event.sender.id, controller)
+    const onGone = (): void => controller.abort()
+    event.sender.once('destroyed', onGone)
+    try {
+      await downloadVoice(id, (progress) => {
+        if (!event.sender.isDestroyed()) event.sender.send('voice:progress', progress)
+      }, controller.signal)
+    } finally {
+      event.sender.removeListener('destroyed', onGone)
+      if (voiceDownloads.get(event.sender.id) === controller) voiceDownloads.delete(event.sender.id)
+    }
+  })
+  ipcMain.handle('voice:cancel', (event) => {
+    voiceDownloads.get(event.sender.id)?.abort()
+  })
+  ipcMain.handle('voice:transcribe', async (_event, wav: unknown) => {
+    const bytes = audioBytes(wav)
+    if (!bytes) throw new Error('The recording was empty.')
+    return transcribeWav(bytes)
+  })
+  ipcMain.handle('voice:speak', (_event, text: unknown) => {
+    if (typeof text !== 'string' || !text.trim()) throw new Error('There is nothing to read.')
+    return speakText(text.slice(0, 8000))
+  })
+  ipcMain.handle('voice:stop-speaking', () => {
+    stopSpeaking()
+  })
   ipcMain.handle('agent:context', (_event, root: unknown, session: unknown, model: unknown, focus: unknown, voice: unknown) => {
     if (typeof session !== 'string' || !session.trim()) throw new Error('Choose a session.')
     if (typeof model !== 'string' || !model.trim()) throw new Error('Choose a model.')
@@ -421,8 +455,31 @@ function promptSettings(raw: unknown): { extra: string; caveman: boolean } {
   }
 }
 
+function allowMicrophone(): void {
+  session.defaultSession.setPermissionCheckHandler((_contents, permission, _origin, details) => {
+    if (permission !== 'media') return true
+    return details.mediaType !== 'video'
+  })
+  session.defaultSession.setPermissionRequestHandler((_contents, permission, callback, details) => {
+    if (permission !== 'media') {
+      callback(false)
+      return
+    }
+    const types = 'mediaTypes' in details ? details.mediaTypes : undefined
+    callback(!types || types.length === 0 || types.every((type) => type === 'audio'))
+  })
+}
+
+function audioBytes(value: unknown): Buffer | null {
+  if (value instanceof ArrayBuffer) return Buffer.from(value)
+  if (ArrayBuffer.isView(value)) return Buffer.from(value.buffer, value.byteOffset, value.byteLength)
+  return null
+}
+
 app.whenReady().then(() => {
+  allowMicrophone()
   registerIpc()
+  warmWhisper()
   void installMenu().then(() => createWindow())
 
   app.on('activate', () => {
@@ -430,7 +487,11 @@ app.whenReady().then(() => {
   })
 })
 
-app.on('before-quit', () => stopAllTerminals())
+app.on('before-quit', () => {
+  stopAllTerminals()
+  stopSpeaking()
+  stopWhisper()
+})
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

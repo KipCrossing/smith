@@ -226,6 +226,23 @@ export interface ModelPullProgress {
   total: number
 }
 
+export type VoiceId = 'whisper' | 'piper'
+
+export interface VoicePackage {
+  id: VoiceId
+  name: string
+  detail: string
+  installed: boolean
+  available: boolean
+}
+
+export interface VoiceProgress {
+  id: VoiceId
+  status: string
+  completed: number
+  total: number
+}
+
 export type AgentEvent =
   | { type: 'status'; text: string }
   | { type: 'step'; index: number; total: number }
@@ -281,6 +298,13 @@ export interface EditorApi {
   pullModel: (name: string) => Promise<void>
   cancelPull: () => Promise<void>
   onPullProgress: (callback: (progress: ModelPullProgress) => void) => () => void
+  voiceStatus: () => Promise<VoicePackage[]>
+  downloadVoice: (id: VoiceId) => Promise<void>
+  cancelVoiceDownload: () => Promise<void>
+  transcribe: (wav: ArrayBuffer) => Promise<string>
+  speak: (text: string) => Promise<ArrayBuffer>
+  stopSpeaking: () => Promise<void>
+  onVoiceProgress: (callback: (progress: VoiceProgress) => void) => () => void
   listAgentSessions: (root: string) => Promise<AgentSessionState>
   readAgentSession: (root: string, id: string) => Promise<AgentSessionState>
   newAgentSession: (root: string) => Promise<AgentSessionState>
