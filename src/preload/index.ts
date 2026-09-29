@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { AgentEvent, EditorApi, MenuAction, ModelPullProgress } from '../shared/types'
+import type { AgentEvent, AgentPromptSettings, EditorApi, MenuAction, ModelPullProgress } from '../shared/types'
 
 const api: EditorApi = {
   openFolder: () => ipcRenderer.invoke('dialog:open-folder'),
@@ -64,7 +64,9 @@ const api: EditorApi = {
   clearAgentSession: (root, id) => ipcRenderer.invoke('agent:session-clear', root, id),
   forgetAgentFile: (root, id, filePath) => ipcRenderer.invoke('agent:session-forget-file', root, id, filePath),
   rememberAgentFiles: (root, id, files) => ipcRenderer.invoke('agent:session-remember-files', root, id, files),
-  contextBudget: (root, session, model, focus) => ipcRenderer.invoke('agent:context', root, session, model, focus),
+  contextBudget: (root, session, model, focus, voice: AgentPromptSettings) =>
+    ipcRenderer.invoke('agent:context', root, session, model, focus, voice),
+  agentPrompt: (root) => ipcRenderer.invoke('agent:prompt', root),
   refreshProjectIndex: (root) => ipcRenderer.invoke('agent:index', root),
   runAgent: (request) => ipcRenderer.invoke('agent:run', request),
   stopAgent: () => ipcRenderer.invoke('agent:stop'),

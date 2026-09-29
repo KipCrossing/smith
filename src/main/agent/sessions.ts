@@ -345,6 +345,13 @@ function readTrace(raw: unknown): AgentTrace[] {
     const seconds = typeof row.seconds === 'number' && row.seconds > 0 ? Math.round(row.seconds) : 1
     return [{ kind: 'thought', seconds, text }]
   }
+  if (row.kind === 'context') {
+    const tokens = typeof row.tokens === 'number' && row.tokens > 0 ? Math.round(row.tokens) : 0
+    if (!tokens) return []
+    const added = typeof row.added === 'number' && row.added > 0 ? Math.round(row.added) : 0
+    const step = typeof row.step === 'number' && row.step > 0 ? Math.round(row.step) : 1
+    return [{ kind: 'context', step, tokens, added }]
+  }
   if (typeof row.name !== 'string' || !row.name) return []
   const detail = typeof row.detail === 'string' ? row.detail.trim().slice(0, 200) : ''
   return [{ kind: 'tool', name: row.name, ok: row.ok === true, detail }]

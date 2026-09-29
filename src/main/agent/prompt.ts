@@ -1,4 +1,5 @@
 import os from 'os'
+import type { AgentPromptPreview, AgentPromptSettings } from '../../shared/types'
 
 const ENVIRONMENT = `## Environment
 
@@ -82,13 +83,36 @@ When the task is done, stop calling tools and write a short report:
 Write in complete sentences. Do not restate these instructions or narrate every
 step you took.`
 
-export function buildPrompt(root: string): string {
+export const CAVEMAN = `## Caveman
+
+Speak like a caveman. Short sentence. Simple word.
+Drop filler, greeting, and recap.
+Drop "the", "a", and "an" when the meaning stays clear.
+Name, path, code, command, and number stay exact.
+Code stays normal.
+This replaces the instruction to write in complete sentences. The work rules above stay.`
+
+const EXTRA_LIMIT = 8_000
+
+export function buildPrompt(root: string, voice: AgentPromptSettings = { extra: '', caveman: false }): string {
   const environment = fill(ENVIRONMENT, {
     os: `${os.type()} ${os.release()}`,
     cwd: root,
     today: new Date().toISOString().slice(0, 10)
   })
-  return fill(SYSTEM, { environment })
+  const parts = [fill(SYSTEM, { environment })]
+  if (voice.caveman) parts.push(CAVEMAN)
+  const extra = voice.extra.trim().slice(0, EXTRA_LIMIT)
+  if (extra) parts.push(`## Additional instructions\n\n${extra}`)
+  return parts.join('\n\n')
+}
+
+export function baseInstructions(root: string): string {
+  return buildPrompt(root.trim() || '(no folder open)')
+}
+
+export function promptPreview(root: string): AgentPromptPreview {
+  return { base: baseInstructions(root), caveman: CAVEMAN }
 }
 
 function fill(template: string, values: Record<string, string>): string {

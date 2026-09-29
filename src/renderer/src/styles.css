@@ -858,8 +858,7 @@ button {
   font-size: 12px;
 }
 
-.agent-think,
-.agent-get {
+.agent-think {
   flex: 0 0 auto;
   height: 26px;
   padding: 0 8px;
@@ -881,12 +880,6 @@ button {
 
 .agent-think:disabled {
   opacity: 0.45;
-}
-
-.agent-get:hover,
-.agent-get[aria-expanded='true'] {
-  background: #3a3f4b;
-  color: #e6e8ee;
 }
 
 .agent-pull {
@@ -1071,7 +1064,7 @@ button {
 }
 
 .agent-new,
-.agent-budget,
+.agent-settings,
 .agent-stop,
 .agent-clear {
   height: 26px;
@@ -1082,8 +1075,20 @@ button {
   font-size: 12px;
 }
 
+.agent-settings {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+}
+
+.agent-settings-icon {
+  display: block;
+}
+
 .agent-new:hover:not(:disabled),
-.agent-budget:hover,
+.agent-settings:hover,
+.agent-settings[aria-expanded='true'],
 .agent-stop:hover:not(:disabled),
 .agent-clear:hover {
   background: #2c313a;
@@ -1104,6 +1109,10 @@ button {
   color: #98c379;
 }
 
+.agent-settings .agent-budget-pct {
+  margin-left: 0;
+}
+
 .agent-budget-pct.over {
   color: #e06c75;
 }
@@ -1112,31 +1121,22 @@ button {
   display: none;
 }
 
-.context-window {
+.agent-settings-window {
   position: absolute;
   inset: 0;
-  z-index: 5;
-  display: grid;
-  place-items: center;
-  padding: 16px;
-  background: rgba(12, 14, 18, 0.72);
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  background: #21252b;
+  color: #d7dae0;
 }
 
-.context-window[hidden] {
+.agent-settings-window[hidden] {
   display: none;
 }
 
-.context-card {
-  width: min(420px, 100%);
-  max-height: 100%;
-  overflow: auto;
-  border: 1px solid #181a1f;
-  border-radius: 10px;
-  background: #21252b;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
-}
-
-.context-card-head {
+.agent-settings-head {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1145,14 +1145,103 @@ button {
   font-weight: 600;
 }
 
-.context-close {
+.agent-settings-close {
   color: #abb2bf;
   font-size: 16px;
   padding: 0 4px;
 }
 
+.agent-settings-close:hover {
+  color: #e6e8ee;
+}
+
+.agent-settings-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 14px 18px;
+}
+
+.agent-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 0;
+  border-bottom: 1px solid #181a1f;
+}
+
+.agent-settings-section h2 {
+  margin: 0;
+  color: #7f848e;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.agent-settings-note {
+  margin: 0;
+  color: #7f848e;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.agent-instructions,
+.agent-caveman-text {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 6px;
+  background: #1a1d23;
+  color: #abb2bf;
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.agent-extra {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  padding: 8px;
+  border: 1px solid #181a1f;
+  border-radius: 6px;
+  background: #2c313a;
+  color: #d7dae0;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.agent-extra:focus {
+  border-color: #61afef;
+  outline: none;
+}
+
+.agent-caveman {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.agent-settings-window .agent-pull-form,
+.agent-settings-window .agent-model-row {
+  flex: 0 0 auto;
+}
+
+.agent-settings-window .context-card-body {
+  padding: 0;
+}
+
+.agent-settings-window .context-chart {
+  flex-wrap: wrap;
+}
+
 .context-card-body {
-  padding: 14px 12px 16px;
+  padding: 0;
 }
 
 .context-chart {
@@ -1558,29 +1647,26 @@ button {
 
 .agent-composer {
   display: flex;
-  gap: 8px;
-  align-items: flex-end;
-  padding: 10px 12px 12px;
-  border-top: 1px solid #181a1f;
-  background: #21252b;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 10px 10px;
+  padding: 8px 8px 6px;
+  border: 1px solid #3a3f4b;
+  border-radius: 14px;
+  background: #282c34;
 }
 
 .agent-input {
   flex: 1 1 auto;
-  min-height: 40px;
+  min-height: 36px;
   max-height: 140px;
   overflow: auto;
-  padding: 9px 12px;
-  border: 1px solid transparent;
-  border-radius: 12px;
-  background: #2c313a;
+  padding: 4px 6px;
+  border: 0;
+  background: transparent;
   outline: none;
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-.agent-input:focus {
-  border-color: #61afef;
 }
 
 .agent-input:empty::before {
@@ -1588,21 +1674,115 @@ button {
   color: #5c6370;
 }
 
+.agent-composer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.agent-composer-left,
+.agent-composer-right {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.agent-composer-left {
+  flex: 1 1 auto;
+}
+
+.agent-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: #3a3f4b;
+  color: #d7dae0;
+  font-size: 12px;
+  cursor: default;
+}
+
+.agent-model-quick {
+  flex: 1 1 auto;
+  width: 0;
+  max-width: 180px;
+  height: 26px;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: #abb2bf;
+}
+
+.agent-model-quick:focus {
+  outline: none;
+}
+
+.agent-wheel,
+.agent-attach,
 .agent-send {
-  height: 36px;
-  padding: 0 14px;
-  border-radius: 10px;
-  background: #61afef;
-  color: #17202b;
-  font-weight: 600;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 999px;
+}
+
+.agent-wheel,
+.agent-attach {
+  color: #abb2bf;
+  background: transparent;
+}
+
+.agent-wheel:hover,
+.agent-attach:hover {
+  background: #3a3f4b;
+  color: #e6e8ee;
+}
+
+.agent-attach[hidden] {
+  display: none;
+}
+
+.agent-wheel-track,
+.agent-wheel-value {
+  fill: none;
+  stroke-width: 2;
+}
+
+.agent-wheel-track {
+  stroke: #3a3f4b;
+}
+
+.agent-wheel-value {
+  stroke: #abb2bf;
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: 8px 8px;
+  stroke-dasharray: 0 37.7;
+}
+
+.agent-wheel.over .agent-wheel-value {
+  stroke: #e06c75;
+}
+
+.agent-send {
+  background: #e6e8ee;
+  color: #1e2127;
 }
 
 .agent-send:hover {
-  background: #7ab8f2;
+  background: #fff;
 }
 
 .agent-send:disabled {
-  opacity: 0.55;
+  opacity: 0.4;
 }
 
 .agent-ref {

@@ -1,4 +1,4 @@
-import type { ContextBudget, ContextSlice } from '../../shared/types'
+import type { AgentPromptSettings, ContextBudget, ContextSlice } from '../../shared/types'
 import { contextPrompt } from './context'
 import { ollamaHost } from './ollama'
 import { buildPrompt } from './prompt'
@@ -9,8 +9,8 @@ import { Toolset, openWorkspace } from './tools'
 const FALLBACK_CHARS_PER_TOKEN = 4
 const ratios = new Map<string, number>()
 
-export function instructionText(root: string, hasHistory: boolean): string {
-  const base = buildPrompt(root)
+export function instructionText(root: string, hasHistory: boolean, voice: AgentPromptSettings = { extra: '', caveman: false }): string {
+  const base = buildPrompt(root, voice)
   if (!hasHistory) return base
   return `${base}\n\nEarlier messages are this session. Continue that conversation.`
 }
@@ -36,13 +36,24 @@ export function contextLengthFromInfo(info: Record<string, unknown>): number {
   return best
 }
 
-export async function measureContext(project: string, session: string, model: string, focus: string | null = null): Promise<ContextBudget> {
+export async function contextLimit(model: string): Promise<number> {
+  const window = await contextWindow(model)
+  return window.limit
+}
+
+export async function measureContext(
+  project: string,
+  session: string,
+  model: string,
+  focus: string | null = null,
+  voice: AgentPromptSettings = { extra: '', caveman: false }
+): Promise<ContextBudget> {
   const workspace = await openWorkspace(project)
   await refreshProjectIndex(workspace.root).catch(() => undefined)
   const turns = await readTurns(project, session)
   const files = await readSessionFiles(project, session)
   const fileText = await contextPrompt(workspace, files)
-  const instructions = instructionText(workspace.root, turns.length > 0)
+  const instructions = instructionText(workspace.root, turns.length > 0, voice)
   const projectText = await projectPrompt(workspace.root, [focus]).catch(() => '')
   const conversation = turns.map((turn) => turn.content).join('\n')
   const toolText = JSON.stringify(new Toolset(workspace).schemas())

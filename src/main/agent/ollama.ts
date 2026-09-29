@@ -1,4 +1,4 @@
-import { DEFAULT_AGENT_MODEL } from '../../shared/types'
+import { DEFAULT_AGENT_MODEL, type InstalledModel } from '../../shared/types'
 
 const DEFAULT_HOST = 'http://localhost:11434'
 const TIMEOUT_MS = 600_000
@@ -157,7 +157,7 @@ export async function pullModel(
   return model
 }
 
-export async function listModels(): Promise<string[]> {
+export async function listModels(): Promise<InstalledModel[]> {
   const host = ollamaHost()
   let response: Response
   try {
@@ -167,11 +167,46 @@ export async function listModels(): Promise<string[]> {
     throw new Error(`Could not reach Ollama at ${host} (${reason}).`)
   }
   if (!response.ok) throw new Error(`Ollama returned ${response.status} while listing models.`)
-  const body = (await response.json()) as { models?: Array<{ name?: string }> }
-  const names = (body.models ?? [])
-    .map((model) => (typeof model.name === 'string' ? model.name.trim() : ''))
-    .filter((name) => name.length > 0)
-  return [...new Set(names)].sort((a, b) => a.localeCompare(b))
+  const body = (await response.json()) as { models?: Array<{ name?: string; capabilities?: unknown }> }
+  const seen = new Set<string>()
+  const listed: Array<{ name: string; capabilities: string[] | null }> = []
+  for (const model of body.models ?? []) {
+    const name = typeof model.name === 'string' ? model.name.trim() : ''
+    if (!name || seen.has(name)) continue
+    seen.add(name)
+    listed.push({
+      name,
+      capabilities: Array.isArray(model.capabilities) ? model.capabilities.filter((item): item is string => typeof item === 'string') : null
+    })
+  }
+  listed.sort((a, b) => a.name.localeCompare(b.name))
+  return Promise.all(listed.map(async (model) => ({
+    name: model.name,
+    vision: model.capabilities ? model.capabilities.includes('vision') : await seesImages(model.name)
+  })))
+}
+
+const visionCache = new Map<string, boolean>()
+
+async function seesImages(name: string): Promise<boolean> {
+  const cached = visionCache.get(name)
+  if (cached !== undefined) return cached
+  try {
+    const response = await fetch(`${ollamaHost()}/api/show`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: name }),
+      signal: AbortSignal.timeout(8_000)
+    })
+    if (!response.ok) return false
+    const body = (await response.json()) as { capabilities?: unknown }
+    if (!Array.isArray(body.capabilities)) return false
+    const vision = body.capabilities.includes('vision')
+    visionCache.set(name, vision)
+    return vision
+  } catch {
+    return false
+  }
 }
 
 export async function prompt(task: string, options: PromptOptions = {}): Promise<ChatMessage> {

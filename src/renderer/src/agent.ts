@@ -1,10 +1,12 @@
-import type { AgentContextFile, AgentSessionInfo, AgentSessionState, AgentThought, AgentToolUse, AgentTrace, AgentTurn, ContextBudget, ContextSlice, ModelPullProgress } from '../../shared/types'
+import type { AgentContextFile, AgentContextNote, AgentPromptSettings, AgentSessionInfo, AgentSessionState, AgentThought, AgentToolUse, AgentTrace, AgentTurn, ContextBudget, ContextSlice, ModelPullProgress } from '../../shared/types'
 import { DEFAULT_AGENT_MODEL } from '../../shared/types'
 import { referenceDetail, referenceLabel, type TextReference } from './references'
 
 const OPEN_KEY = 'smith.agent.open'
 const MODEL_KEY = 'smith.agent.model'
 const THINK_KEY = 'smith.agent.think'
+const EXTRA_KEY = 'smith.agent.extra'
+const CAVEMAN_KEY = 'smith.agent.caveman'
 const sources = new WeakMap<HTMLElement, string>()
 
 type Part =
@@ -39,32 +41,12 @@ export function mountAgent(
     <div class="agent-head">
       <span class="agent-title">Agent</span>
       <div class="agent-actions">
+        <button class="agent-settings" type="button" title="Agent settings" aria-label="Agent settings" aria-expanded="false">${settingsIcon()}<span class="agent-budget-pct"></span></button>
         <button class="agent-new" type="button">New</button>
-        <button class="agent-budget" type="button">Session Context<span class="agent-budget-pct"></span></button>
         <button class="agent-stop" type="button" disabled>Stop</button>
         <button class="agent-clear" type="button">Clear</button>
       </div>
       <select class="agent-session" aria-label="Session"></select>
-      <div class="agent-model-row">
-        <select class="agent-model" aria-label="Model"></select>
-        <button class="agent-think" type="button" aria-pressed="false" title="Think before answering. Leave this off for models that do not support thinking.">Think</button>
-        <button class="agent-get" type="button" aria-expanded="false">Get model</button>
-      </div>
-    </div>
-    <div class="agent-pull" hidden>
-      <form class="agent-pull-form">
-        <input class="agent-pull-name" type="text" spellcheck="false" autocomplete="off" placeholder="qwen2.5-coder:7b" aria-label="Model to download" />
-        <button class="agent-pull-go" type="submit">Download</button>
-      </form>
-      <div class="agent-pull-chips"></div>
-      <div class="agent-pull-track" hidden>
-        <div class="agent-pull-bar" aria-hidden="true"><span class="agent-pull-fill"></span></div>
-        <div class="agent-pull-meta">
-          <span class="agent-pull-status"></span>
-          <button class="agent-pull-cancel" type="button">Cancel</button>
-        </div>
-      </div>
-      <p class="agent-pull-note"></p>
     </div>
     <div class="agent-log">
       <div class="agent-empty">Ask a question, or paste a file selection. A follow-up continues this session.</div>
@@ -75,15 +57,71 @@ export function mountAgent(
     </div>
     <form class="agent-composer">
       <div class="agent-input" contenteditable="true" tabindex="0" role="textbox" aria-label="Message the agent"></div>
-      <button class="agent-send" type="submit">Send</button>
-    </form>
-    <div class="context-window" hidden>
-      <div class="context-card" role="dialog" aria-label="Session Context">
-        <div class="context-card-head">
-          <span>Session Context</span>
-          <button class="context-close" type="button" title="Close">×</button>
+      <div class="agent-composer-bar">
+        <div class="agent-composer-left">
+          <button class="agent-mode" type="button" aria-label="Agent" title="Agent">∞ Agent <span aria-hidden="true">▾</span></button>
+          <select class="agent-model agent-model-quick" aria-label="Model"></select>
         </div>
-        <div class="context-card-body"></div>
+        <div class="agent-composer-right">
+          <button class="agent-wheel" type="button" title="Context" aria-label="Context">
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+              <circle class="agent-wheel-track" cx="8" cy="8" r="6"></circle>
+              <circle class="agent-wheel-value" cx="8" cy="8" r="6"></circle>
+            </svg>
+          </button>
+          <button class="agent-attach" type="button" hidden title="Attach an image" aria-label="Attach an image">${attachIcon()}</button>
+          <button class="agent-send" type="submit" aria-label="Send" title="Send">${sendIcon()}</button>
+        </div>
+      </div>
+    </form>
+    <div class="agent-settings-window" hidden tabindex="-1" role="dialog" aria-label="Agent settings">
+      <div class="agent-settings-head">
+        <span>Agent settings</span>
+        <button class="agent-settings-close" type="button" title="Close">×</button>
+      </div>
+      <div class="agent-settings-body">
+        <section class="agent-settings-section">
+          <h2>Model</h2>
+          <div class="agent-model-row">
+            <select class="agent-model" aria-label="Model"></select>
+            <button class="agent-think" type="button" aria-pressed="false" title="Think before answering. Leave this off for models that do not support thinking.">Think</button>
+          </div>
+          <form class="agent-pull-form">
+            <input class="agent-pull-name" type="text" spellcheck="false" autocomplete="off" placeholder="qwen2.5-coder:7b" aria-label="Model to download" />
+            <button class="agent-pull-go" type="submit">Download</button>
+          </form>
+          <div class="agent-pull-chips"></div>
+          <div class="agent-pull-track" hidden>
+            <div class="agent-pull-bar" aria-hidden="true"><span class="agent-pull-fill"></span></div>
+            <div class="agent-pull-meta">
+              <span class="agent-pull-status"></span>
+              <button class="agent-pull-cancel" type="button">Cancel</button>
+            </div>
+          </div>
+          <p class="agent-pull-note"></p>
+        </section>
+        <section class="agent-settings-section">
+          <h2>Context</h2>
+          <div class="context-card-body"></div>
+        </section>
+        <section class="agent-settings-section">
+          <h2>Instructions</h2>
+          <pre class="agent-instructions"></pre>
+          <p class="agent-settings-note">These are sent with every message. The working directory and date match the open folder.</p>
+        </section>
+        <section class="agent-settings-section">
+          <h2>Additional instructions</h2>
+          <textarea class="agent-extra" maxlength="8000" spellcheck="true" placeholder="Optional notes added after the instructions above."></textarea>
+        </section>
+        <section class="agent-settings-section">
+          <h2>Caveman</h2>
+          <label class="agent-caveman">
+            <input class="agent-caveman-toggle" type="checkbox" />
+            Inject caveman instructions
+          </label>
+          <pre class="agent-caveman-text"></pre>
+          <p class="agent-settings-note">When this is on, that voice is added after the instructions above and before any additional instructions.</p>
+        </section>
       </div>
     </div>
   `
@@ -93,10 +131,13 @@ export function mountAgent(
   const input = must(host, '.agent-input')
   const form = must(host, '.agent-composer') as HTMLFormElement
   const sendButton = must(host, '.agent-send') as HTMLButtonElement
-  const modelSelect = must(host, '.agent-model') as HTMLSelectElement
+  const modelSelects = [...host.querySelectorAll('select.agent-model')] as HTMLSelectElement[]
+  const wheel = must(host, '.agent-wheel') as HTMLButtonElement
+  const wheelRing = host.querySelector('.agent-wheel-value')
+  if (!(wheelRing instanceof SVGCircleElement)) throw new Error('Missing .agent-wheel-value')
+  const wheelValue: SVGCircleElement = wheelRing
+  const attachButton = must(host, '.agent-attach') as HTMLButtonElement
   const thinkButton = must(host, '.agent-think') as HTMLButtonElement
-  const getButton = must(host, '.agent-get') as HTMLButtonElement
-  const pullPanel = must(host, '.agent-pull')
   const pullForm = must(host, '.agent-pull-form') as HTMLFormElement
   const pullName = must(host, '.agent-pull-name') as HTMLInputElement
   const pullGo = must(host, '.agent-pull-go') as HTMLButtonElement
@@ -109,11 +150,15 @@ export function mountAgent(
   const stopButton = must(host, '.agent-stop') as HTMLButtonElement
   const clearButton = must(host, '.agent-clear') as HTMLButtonElement
   const newButton = must(host, '.agent-new') as HTMLButtonElement
-  const budgetButton = must(host, '.agent-budget') as HTMLButtonElement
+  const settingsButton = must(host, '.agent-settings') as HTMLButtonElement
+  const settingsWindow = must(host, '.agent-settings-window')
+  const settingsClose = must(host, '.agent-settings-close') as HTMLButtonElement
   const budgetPct = must(host, '.agent-budget-pct')
-  const contextWindow = must(host, '.context-window')
   const contextBody = must(host, '.context-card-body')
-  const contextClose = must(host, '.context-close') as HTMLButtonElement
+  const instructions = must(host, '.agent-instructions')
+  const extraInput = must(host, '.agent-extra') as HTMLTextAreaElement
+  const cavemanToggle = must(host, '.agent-caveman-toggle') as HTMLInputElement
+  const cavemanText = must(host, '.agent-caveman-text')
   const sessionSelect = must(host, '.agent-session') as HTMLSelectElement
   let busy = false
   let pulling = false
@@ -122,6 +167,12 @@ export function mountAgent(
   let sessionId = ''
   let sessionToken = 0
   let contextFiles: AgentContextFile[] = []
+  const visionModels = new Set<string>()
+  let budgetTimer = 0
+  let budgetLoad = 0
+  let instructionLoad = 0
+  extraInput.value = localStorage.getItem(EXTRA_KEY) ?? ''
+  cavemanToggle.checked = localStorage.getItem(CAVEMAN_KEY) === '1'
   contextList.addEventListener('click', (event) => {
     const target = event.target
     const button = target instanceof HTMLElement ? target.closest('.agent-context-remove') : null
@@ -137,20 +188,42 @@ export function mountAgent(
   newButton.addEventListener('click', () => {
     void startSession()
   })
-  budgetButton.addEventListener('click', () => {
-    void openBudget()
+  settingsButton.addEventListener('click', () => {
+    openSettings()
   })
-  contextClose.addEventListener('click', () => {
-    contextWindow.hidden = true
+  settingsClose.addEventListener('click', () => {
+    closeSettings()
   })
-  contextWindow.addEventListener('click', (event) => {
-    if (event.target === contextWindow) contextWindow.hidden = true
+  settingsWindow.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return
+    event.preventDefault()
+    event.stopPropagation()
+    closeSettings()
+  })
+  extraInput.addEventListener('input', () => {
+    localStorage.setItem(EXTRA_KEY, extraInput.value)
+    scheduleBudget()
+  })
+  cavemanToggle.addEventListener('change', () => {
+    localStorage.setItem(CAVEMAN_KEY, cavemanToggle.checked ? '1' : '0')
+    void refreshBudget()
   })
   sessionSelect.addEventListener('change', () => {
     void chooseSession(sessionSelect.value)
   })
-  modelSelect.addEventListener('change', () => {
-    if (modelSelect.value) localStorage.setItem(MODEL_KEY, modelSelect.value)
+  for (const select of modelSelects) {
+    select.addEventListener('change', () => {
+      const value = select.value
+      for (const other of modelSelects) {
+        if (other !== select && [...other.options].some((option) => option.value === value)) other.value = value
+      }
+      if (value) localStorage.setItem(MODEL_KEY, value)
+      paintAttach()
+      void refreshBudget()
+    })
+  }
+  wheel.addEventListener('click', () => {
+    openSettings()
   })
   setThinking(localStorage.getItem(THINK_KEY) === '1')
   thinkButton.addEventListener('click', () => {
@@ -165,12 +238,6 @@ export function mountAgent(
     chip.textContent = suggestion.label
     pullChips.append(chip)
   }
-  getButton.addEventListener('click', () => {
-    const opening = pullPanel.hidden
-    pullPanel.hidden = !opening
-    getButton.setAttribute('aria-expanded', opening ? 'true' : 'false')
-    if (opening) pullName.focus()
-  })
   pullForm.addEventListener('submit', (event) => {
     event.preventDefault()
     void startPull(pullName.value)
@@ -189,7 +256,7 @@ export function mountAgent(
     if (progress.model !== pullingName) return
     paintPull(progress)
   })
-  void loadModels(modelSelect)
+  void reloadModels()
 
   form.addEventListener('submit', (event) => {
     event.preventDefault()
@@ -222,6 +289,7 @@ export function mountAgent(
     sync(project) {
       void loadSessions(project)
       if (project) void window.api.refreshProjectIndex(project).catch(() => undefined)
+      if (!settingsWindow.hidden) void loadInstructions(project)
     },
     contains: (node) => node !== null && host.contains(node)
   }
@@ -230,7 +298,7 @@ export function mountAgent(
     host.hidden = !opening
     host.closest('.app')?.classList.toggle('agent-open', opening)
     localStorage.setItem(OPEN_KEY, opening ? '1' : '0')
-    if (opening) void loadModels(modelSelect)
+    if (opening) void reloadModels()
   }
 
   function send(): void {
@@ -279,16 +347,17 @@ export function mountAgent(
       live.classList.add('agent-error')
       return
     }
-    const model = modelSelect.value
+    const model = selectedModel()
     if (!model) {
       status.textContent = ''
-      live.textContent = 'Choose a model. If the list is empty, start Ollama and open the panel again.'
+      live.textContent = 'Choose a model in agent settings. If the list is empty, start Ollama and open settings again.'
       live.classList.add('agent-error')
       return
     }
     rememberFiles(files)
     const think = thinkButton.getAttribute('aria-pressed') === 'true'
-    void run(project, text, model, sessionId, files, think, filePart && filePart.type === 'ref' ? filePart.absolute || filePart.path : null, {
+    const voice = currentVoice()
+    void run(project, text, model, sessionId, files, think, voice, filePart && filePart.type === 'ref' ? filePart.absolute || filePart.path : null, {
       trail,
       thinking,
       status,
@@ -304,6 +373,7 @@ export function mountAgent(
     session: string,
     files: AgentContextFile[],
     think: boolean,
+    voice: AgentPromptSettings,
     file: string | null,
     view: { trail: HTMLElement; thinking: HTMLElement; status: HTMLElement; live: HTMLElement; replyBody: HTMLElement }
   ): Promise<void> {
@@ -364,12 +434,26 @@ export function mountAgent(
       } else if (event.type === 'done') {
         hideThought()
         finish(event.text || answer)
+      } else if (event.type === 'loop-context') {
+        activity.add({ kind: 'context', step: event.step, tokens: event.tokens, added: event.added })
+        if (event.limit > 0) paintContextPercent(Math.round((event.tokens / event.limit) * 100))
       } else if (event.type === 'context') showBudget(event.budget)
       log.scrollTop = log.scrollHeight
     })
     try {
       await window.api.rememberAgentFiles(project, session, files)
-      const result = await window.api.runAgent({ project, text, file, focus: context.focus(), model, session, files, think })
+      const result = await window.api.runAgent({
+        project,
+        text,
+        file,
+        focus: context.focus(),
+        model,
+        session,
+        files,
+        think,
+        extra: voice.extra,
+        caveman: voice.caveman
+      })
       if (result.error) finish(result.error, true)
       else finish(result.text || answer)
     } catch (error) {
@@ -389,7 +473,7 @@ export function mountAgent(
   function setBusy(running: boolean): void {
     busy = running
     sendButton.disabled = running
-    modelSelect.disabled = running || pulling
+    for (const select of modelSelects) select.disabled = running || pulling
     thinkButton.disabled = running
     sessionSelect.disabled = running
     newButton.disabled = running
@@ -403,7 +487,7 @@ export function mountAgent(
     pullTrack.hidden = !active
     pullCancel.disabled = !active
     for (const chip of pullChips.querySelectorAll('button')) chip.disabled = active
-    modelSelect.disabled = busy || active
+    for (const select of modelSelects) select.disabled = busy || active
     if (!active) {
       pullFill.style.width = '0'
       pullFill.classList.remove('indeterminate')
@@ -429,9 +513,9 @@ export function mountAgent(
     try {
       await window.api.pullModel(name)
       if (token !== pullToken) return
-      await loadModels(modelSelect, name)
+      await reloadModels(name)
       if (token !== pullToken) return
-      const selected = modelSelect.value
+      const selected = selectedModel()
       const matches = selected === name || selected.startsWith(`${name}:`)
       pullNote.textContent = matches ? `Installed ${selected}. It is selected above.` : `Installed ${name}.`
       pullNote.className = 'agent-pull-note ok'
@@ -543,30 +627,91 @@ export function mountAgent(
     }
   }
 
-  async function openBudget(): Promise<void> {
-    contextWindow.hidden = false
-    contextBody.textContent = 'Counting tokens…'
+  function currentVoice(): AgentPromptSettings {
+    return { extra: extraInput.value.trim(), caveman: cavemanToggle.checked }
+  }
+
+  function openSettings(): void {
+    settingsWindow.hidden = false
+    settingsButton.setAttribute('aria-expanded', 'true')
+    settingsWindow.focus()
+    if (!contextBody.childElementCount && !contextBody.textContent) contextBody.textContent = 'Counting tokens…'
+    void loadInstructions(context.project())
+    void refreshBudget()
+  }
+
+  function closeSettings(): void {
+    settingsWindow.hidden = true
+    settingsButton.setAttribute('aria-expanded', 'false')
+  }
+
+  function scheduleBudget(): void {
+    window.clearTimeout(budgetTimer)
+    budgetTimer = window.setTimeout(() => {
+      void refreshBudget()
+    }, 300)
+  }
+
+  async function loadInstructions(project: string | null): Promise<void> {
+    const token = ++instructionLoad
+    try {
+      const preview = await window.api.agentPrompt(project)
+      if (token !== instructionLoad || settingsWindow.hidden) return
+      instructions.textContent = preview.base
+      cavemanText.textContent = preview.caveman
+    } catch (error) {
+      if (token !== instructionLoad || settingsWindow.hidden) return
+      instructions.textContent = error instanceof Error ? error.message : String(error)
+    }
+  }
+
+  async function refreshBudget(): Promise<void> {
+    const token = ++budgetLoad
     const project = context.project()
-    const model = modelSelect.value
+    const model = selectedModel()
     if (!project || !sessionId || !model) {
-      contextBody.textContent = 'Open a folder and choose a model.'
+      if (!settingsWindow.hidden) contextBody.textContent = 'Open a folder and choose a model.'
       return
     }
     try {
-      const budget = await window.api.contextBudget(project, sessionId, model, context.focus())
-      if (contextWindow.hidden) return
+      const budget = await window.api.contextBudget(project, sessionId, model, context.focus(), currentVoice())
+      if (token !== budgetLoad) return
       showBudget(budget)
     } catch (error) {
-      if (contextWindow.hidden) return
+      if (token !== budgetLoad || settingsWindow.hidden) return
       contextBody.textContent = error instanceof Error ? error.message : String(error)
     }
   }
 
-  function showBudget(budget: ContextBudget): void {
-    const percent = budget.limit > 0 ? Math.round((budget.used / budget.limit) * 100) : null
+  async function reloadModels(prefer?: string): Promise<void> {
+    const vision = await loadModels(modelSelects, prefer)
+    visionModels.clear()
+    for (const name of vision) visionModels.add(name)
+    paintAttach()
+  }
+
+  function selectedModel(): string {
+    return modelSelects.find((select) => select.value)?.value ?? ''
+  }
+
+  function paintAttach(): void {
+    attachButton.hidden = !visionModels.has(selectedModel())
+  }
+
+  function paintContextPercent(percent: number | null): void {
     budgetPct.textContent = percent === null ? '' : `${percent}%`
     budgetPct.classList.toggle('over', percent !== null && percent > 100)
-    if (!contextWindow.hidden) renderBudget(contextBody, budget)
+    const used = percent === null ? 0 : Math.min(100, Math.max(0, percent))
+    const length = 2 * Math.PI * 6
+    wheelValue.style.strokeDasharray = `${(used / 100) * length} ${length}`
+    wheel.classList.toggle('over', percent !== null && percent > 100)
+    wheel.title = percent === null ? 'Context' : `${percent}% of the context window`
+  }
+
+  function showBudget(budget: ContextBudget): void {
+    const percent = budget.limit > 0 ? Math.round((budget.used / budget.limit) * 100) : null
+    paintContextPercent(percent)
+    if (!settingsWindow.hidden) renderBudget(contextBody, budget)
   }
 
   function rememberFiles(incoming: AgentContextFile[]): void {
@@ -684,33 +829,38 @@ export function mountAgent(
   }
 }
 
-async function loadModels(select: HTMLSelectElement, prefer?: string): Promise<string> {
+async function loadModels(selects: HTMLSelectElement[], prefer?: string): Promise<string[]> {
   const token = ++modelLoad
-  const saved = select.value || localStorage.getItem(MODEL_KEY) || ''
+  const saved = selects.find((select) => select.value)?.value || localStorage.getItem(MODEL_KEY) || ''
   const preferred = prefer?.trim() || saved || DEFAULT_AGENT_MODEL
   try {
     const models = await window.api.listModels()
-    if (token !== modelLoad) return ''
+    if (token !== modelLoad) return []
     if (models.length === 0) {
-      const option = document.createElement('option')
-      option.value = ''
-      option.textContent = 'No models installed'
-      select.replaceChildren(option)
-      return ''
+      for (const select of selects) {
+        const option = document.createElement('option')
+        option.value = ''
+        option.textContent = 'No models installed'
+        select.replaceChildren(option)
+      }
+      return []
     }
-    const installed = matchModel(models, preferred)
-    fillModels(select, models, installed)
-    return installed
+    const installed = matchModel(models.map((model) => model.name), preferred)
+    for (const select of selects) fillModels(select, models.map((model) => model.name), installed)
+    return models.filter((model) => model.vision).map((model) => model.name)
   } catch {
-    if (token !== modelLoad) return ''
-    if (preferred) fillModels(select, [preferred], preferred)
-    else {
-      const option = document.createElement('option')
-      option.value = ''
-      option.textContent = 'Ollama unavailable'
-      select.replaceChildren(option)
+    if (token !== modelLoad) return []
+    if (preferred) {
+      for (const select of selects) fillModels(select, [preferred], preferred)
+    } else {
+      for (const select of selects) {
+        const option = document.createElement('option')
+        option.value = ''
+        option.textContent = 'Ollama unavailable'
+        select.replaceChildren(option)
+      }
     }
-    return ''
+    return []
   }
 }
 
@@ -743,6 +893,18 @@ const SUGGESTED_MODELS = [
   { label: 'DeepSeek R1 8B', name: 'deepseek-r1:8b' },
   { label: 'Mistral', name: 'mistral' }
 ]
+
+function sendIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 4.2 5.2 11l1.4 1.4L11 7.9V19.5h2V7.9l4.4 4.5 1.4-1.4L12 4.2z"/></svg>`
+}
+
+function attachIcon(): string {
+  return `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M8.2 12.6 14 6.8a3.1 3.1 0 0 1 4.4 4.4l-7.2 7.2a4.4 4.4 0 0 1-6.2-6.2l6.5-6.5"/></svg>`
+}
+
+function settingsIcon(): string {
+  return `<svg class="agent-settings-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.8 7.8 0 0 0 .1-1 7.8 7.8 0 0 0-.1-1l2.1-1.6a.5.5 0 0 0 .1-.6l-2-3.4a.5.5 0 0 0-.6-.2l-2.5 1a7.4 7.4 0 0 0-1.7-1l-.4-2.6a.5.5 0 0 0-.5-.4h-4a.5.5 0 0 0-.5.4l-.4 2.6a7.4 7.4 0 0 0-1.7 1l-2.5-1a.5.5 0 0 0-.6.2l-2 3.4a.5.5 0 0 0 .1.6L4.6 11a7.8 7.8 0 0 0-.1 1 7.8 7.8 0 0 0 .1 1l-2.1 1.6a.5.5 0 0 0-.1.6l2 3.4a.5.5 0 0 0 .6.2l2.5-1a7.4 7.4 0 0 0 1.7 1l.4 2.6a.5.5 0 0 0 .5.4h4a.5.5 0 0 0 .5-.4l.4-2.6a7.4 7.4 0 0 0 1.7-1l2.5 1a.5.5 0 0 0 .6-.2l2-3.4a.5.5 0 0 0-.1-.6L19.4 13zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg>`
+}
 
 function pullErrorText(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error)
@@ -913,6 +1075,7 @@ function createActivity(host: HTMLElement, open: boolean): { add(row: ActivityRo
 
 function activityRow(row: ActivityRow): HTMLLIElement {
   if (row.kind === 'thought') return thoughtRow(row)
+  if (row.kind === 'context') return contextRow(row)
   const item = document.createElement('li')
   item.className = 'agent-activity-row'
   if (!row.ok) item.classList.add('agent-activity-failed')
@@ -923,6 +1086,22 @@ function activityRow(row: ActivityRow): HTMLLIElement {
   detail.className = 'agent-activity-detail'
   detail.textContent = row.detail
   if (row.detail) detail.title = row.detail
+  item.append(label, detail)
+  return item
+}
+
+function contextRow(row: AgentContextNote): HTMLLIElement {
+  const item = document.createElement('li')
+  item.className = 'agent-activity-row'
+  const label = document.createElement('span')
+  label.className = 'agent-activity-label'
+  label.textContent = 'Context'
+  const detail = document.createElement('span')
+  detail.className = 'agent-activity-detail'
+  detail.textContent = row.added > 0 ? `${formatCount(row.tokens)} · +${formatCount(row.added)}` : formatCount(row.tokens)
+  detail.title = row.added > 0
+    ? `Step ${row.step} sent ${formatCount(row.tokens)} tokens, ${formatCount(row.added)} more than the previous step.`
+    : `Step ${row.step} sent ${formatCount(row.tokens)} tokens.`
   item.append(label, detail)
   return item
 }
@@ -950,6 +1129,14 @@ function thoughtRow(row: AgentThought): HTMLLIElement {
 }
 
 function activitySummary(rows: ActivityRow[]): string {
+  const headline = activityHeadline(rows)
+  const latest = [...rows].reverse().find((row): row is AgentContextNote => row.kind === 'context')
+  if (!latest) return headline
+  const count = `${formatCount(latest.tokens)} tokens`
+  return headline === 'Working' ? count : `${headline} · ${count}`
+}
+
+function activityHeadline(rows: ActivityRow[]): string {
   const tools = rows.filter((row): row is AgentToolUse => row.kind === 'tool')
   if (tools.length === 1) {
     const tool = tools[0]

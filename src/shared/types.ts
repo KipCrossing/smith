@@ -132,7 +132,14 @@ export interface AgentThought {
   text: string
 }
 
-export type AgentTrace = AgentToolUse | AgentThought
+export interface AgentContextNote {
+  kind: 'context'
+  step: number
+  tokens: number
+  added: number
+}
+
+export type AgentTrace = AgentToolUse | AgentThought | AgentContextNote
 
 export interface AgentTurn {
   role: 'user' | 'assistant'
@@ -162,6 +169,16 @@ export interface AgentSessionState {
   sessions: AgentSessionInfo[]
 }
 
+export interface AgentPromptSettings {
+  extra: string
+  caveman: boolean
+}
+
+export interface AgentPromptPreview {
+  base: string
+  caveman: string
+}
+
 export interface AgentRequest {
   project: string
   text: string
@@ -171,6 +188,8 @@ export interface AgentRequest {
   session: string
   files: AgentContextFile[]
   think: boolean
+  extra: string
+  caveman: boolean
 }
 
 export interface AgentResult {
@@ -195,6 +214,11 @@ export interface ContextBudget {
   approximate: boolean
 }
 
+export interface InstalledModel {
+  name: string
+  vision: boolean
+}
+
 export interface ModelPullProgress {
   model: string
   status: string
@@ -214,6 +238,7 @@ export type AgentEvent =
   | { type: 'done'; text: string }
   | { type: 'error'; text: string }
   | { type: 'context'; budget: ContextBudget }
+  | { type: 'loop-context'; step: number; tokens: number; added: number; limit: number }
 
 export interface EditorApi {
   openFolder: () => Promise<string | null>
@@ -252,7 +277,7 @@ export interface EditorApi {
   terminalWrite: (data: string) => void
   terminalStop: () => Promise<void>
   onTerminalData: (callback: (data: string) => void) => () => void
-  listModels: () => Promise<string[]>
+  listModels: () => Promise<InstalledModel[]>
   pullModel: (name: string) => Promise<void>
   cancelPull: () => Promise<void>
   onPullProgress: (callback: (progress: ModelPullProgress) => void) => () => void
@@ -262,7 +287,8 @@ export interface EditorApi {
   clearAgentSession: (root: string, id: string) => Promise<AgentSessionState>
   forgetAgentFile: (root: string, id: string, path: string) => Promise<AgentSessionState>
   rememberAgentFiles: (root: string, id: string, files: AgentContextFile[]) => Promise<AgentContextFile[]>
-  contextBudget: (root: string, session: string, model: string, focus: string | null) => Promise<ContextBudget>
+  contextBudget: (root: string, session: string, model: string, focus: string | null, voice: AgentPromptSettings) => Promise<ContextBudget>
+  agentPrompt: (root: string | null) => Promise<AgentPromptPreview>
   refreshProjectIndex: (root: string) => Promise<void>
   runAgent: (request: AgentRequest) => Promise<AgentResult>
   stopAgent: () => Promise<void>

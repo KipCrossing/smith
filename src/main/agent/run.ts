@@ -1,8 +1,8 @@
-import type { AgentEvent, AgentRequest, AgentResult, AgentTrace } from '../../shared/types'
+import type { AgentEvent, AgentPromptSettings, AgentRequest, AgentResult, AgentTrace } from '../../shared/types'
 import { record } from './history'
 import type { ChatMessage } from './ollama'
 import { chat } from './ollama'
-import { instructionText, measureContext, notePromptUsage } from './budget'
+import { contextLimit, instructionText, measureContext, notePromptUsage } from './budget'
 import { contextPrompt } from './context'
 import { projectPrompt, refreshProjectIndex } from './projectIndex'
 import { stat } from 'fs/promises'
@@ -52,21 +52,33 @@ export async function runAgent(request: AgentRequest, emit: Emit, signal: AbortS
     const context = await contextPrompt(workspace, loaded)
     await refreshProjectIndex(workspace.root).catch(() => undefined)
     const project = await projectPrompt(workspace.root, [request.focus, request.file]).catch(() => '')
-    const text = await loop(tools, task, request.model.trim(), request.session, revision, prior, project, context, request.think, emit, signal)
+    const voice = promptVoice(request)
+    const text = await loop(tools, task, request.model.trim(), request.session, revision, prior, project, context, request.think, voice, emit, signal)
     return { text, error: null }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     emit({ type: 'error', text: message })
     return { text: '', error: message }
   } finally {
-    await publishContext(request.project, request.session, request.model.trim(), request.focus, emit)
+    await publishContext(request.project, request.session, request.model.trim(), request.focus, promptVoice(request), emit)
   }
 }
 
-async function publishContext(project: string, session: string, model: string, focus: string | null, emit: Emit): Promise<void> {
+function promptVoice(request: AgentRequest): AgentPromptSettings {
+  return { extra: request.extra, caveman: request.caveman }
+}
+
+async function publishContext(
+  project: string,
+  session: string,
+  model: string,
+  focus: string | null,
+  voice: AgentPromptSettings,
+  emit: Emit
+): Promise<void> {
   if (!project || !session || !model) return
   try {
-    emit({ type: 'context', budget: await measureContext(project, session, model, focus) })
+    emit({ type: 'context', budget: await measureContext(project, session, model, focus, voice) })
   } catch {
     // The reply is already done. A failed recount should not change it.
   }
@@ -82,10 +94,11 @@ async function loop(
   project: string,
   context: string,
   think: boolean,
+  voice: AgentPromptSettings,
   emit: Emit,
   signal: AbortSignal
 ): Promise<string> {
-  const instructions = instructionText(tools.workspace.root, prior.length > 0)
+  const instructions = instructionText(tools.workspace.root, prior.length > 0, voice)
   const system = [instructions, project, context].filter((part) => part.trim()).join('\n\n')
   const messages: ChatMessage[] = [
     { role: 'system', content: system },
@@ -94,22 +107,16 @@ async function loop(
   ]
   const schemas = tools.schemas()
   const toolLog: AgentTrace[] = []
-  const counted = [
-    instructions,
-    project,
-    context,
-    ...prior.map((turn) => turn.content),
-    task,
-    JSON.stringify(schemas)
-  ].join('\n').length
-  let noted = false
+  const limit = await contextLimit(model)
+  let previousPrompt = 0
   let answer = ''
 
   for (let step = 1; step <= MAX_STEPS; step += 1) {
     if (signal.aborted) return stopped(emit)
     emit({ type: 'step', index: step, total: MAX_STEPS })
     emit({ type: 'clear-content' })
-    emit({ type: 'status', text: `Step ${step} of ${MAX_STEPS}` })
+    emit({ type: 'status', text: stepStatus(step, 0) })
+    let stepTokens = 0
     let message: ChatMessage
     try {
       message = await chat(messages, {
@@ -120,9 +127,8 @@ async function loop(
         signal,
         onToken: (channel, text) => emit({ type: 'token', channel, text }),
         onUsage: (promptTokens) => {
-          if (noted || step !== 1) return
-          noted = true
-          notePromptUsage(model, counted, promptTokens)
+          stepTokens = promptTokens
+          notePromptUsage(model, promptCharacters(messages, schemas), promptTokens)
         }
       })
     } catch (error) {
@@ -130,6 +136,13 @@ async function loop(
       const message = error instanceof Error ? error.message : String(error)
       await persist(tools.workspace.root, session, revision, task, message, toolLog)
       throw error
+    }
+    if (stepTokens > 0) {
+      const added = previousPrompt > 0 ? Math.max(0, stepTokens - previousPrompt) : 0
+      previousPrompt = stepTokens
+      toolLog.push({ kind: 'context', step, tokens: stepTokens, added })
+      emit({ type: 'loop-context', step, tokens: stepTokens, added, limit })
+      emit({ type: 'status', text: stepStatus(step, stepTokens) })
     }
     if (signal.aborted) return stopped(emit)
     messages.push(message)
@@ -143,7 +156,7 @@ async function loop(
       if (signal.aborted) return stopped(emit)
       const name = call.function.name
       const detail = toolDetail(name, call.function.arguments)
-      emit({ type: 'status', text: `Step ${step} of ${MAX_STEPS} · ${name}` })
+      emit({ type: 'status', text: stepStatus(step, stepTokens, name) })
       const result = await tools.execute(name, call.function.arguments)
       if (signal.aborted) return stopped(emit)
       const ok = result.result.ok === true
@@ -293,6 +306,23 @@ function baseName(location: string): string {
 function clipDetail(text: string): string {
   const clean = text.trim()
   return clean.length > 160 ? `${clean.slice(0, 159)}…` : clean
+}
+
+function stepStatus(step: number, tokens: number, detail?: string): string {
+  const head = `Step ${step} of ${MAX_STEPS}`
+  const sized = tokens > 0 ? `${head} · ${tokens.toLocaleString('en-US')} tokens` : head
+  return detail ? `${sized} · ${detail}` : sized
+}
+
+function promptCharacters(messages: ChatMessage[], schemas: unknown): number {
+  let chars = JSON.stringify(schemas).length
+  for (const message of messages) {
+    chars += message.content.length
+    if (message.thinking) chars += message.thinking.length
+    if (message.tool_name) chars += message.tool_name.length
+    if (message.tool_calls) chars += JSON.stringify(message.tool_calls).length
+  }
+  return chars
 }
 
 function stopped(emit: Emit): string {

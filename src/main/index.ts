@@ -22,6 +22,7 @@ import { replaceFolder, searchFolder } from './search'
 import { startTerminal, stopAllTerminals, stopTerminal, writeTerminal } from './terminal'
 import { listModels, pullModel } from './agent/ollama'
 import { measureContext } from './agent/budget'
+import { promptPreview } from './agent/prompt'
 import { refreshProjectIndex } from './agent/projectIndex'
 import { beginRun, endRun, runAgent, stopRun } from './agent/run'
 import { clearSession, createSession, forgetSessionFile, listSessions, readSession, rememberSessionFiles } from './agent/sessions'
@@ -291,11 +292,15 @@ function registerIpc(): void {
   ipcMain.handle('agent:pull-cancel', (event) => {
     pulls.get(event.sender.id)?.abort()
   })
-  ipcMain.handle('agent:context', (_event, root: unknown, session: unknown, model: unknown, focus: unknown) => {
+  ipcMain.handle('agent:context', (_event, root: unknown, session: unknown, model: unknown, focus: unknown, voice: unknown) => {
     if (typeof session !== 'string' || !session.trim()) throw new Error('Choose a session.')
     if (typeof model !== 'string' || !model.trim()) throw new Error('Choose a model.')
     const open = typeof focus === 'string' && focus.trim() ? focus : null
-    return measureContext(asAbsolute(root), session, model.trim(), open)
+    return measureContext(asAbsolute(root), session, model.trim(), open, promptSettings(voice))
+  })
+  ipcMain.handle('agent:prompt', (_event, root: unknown) => {
+    const folder = typeof root === 'string' && root.trim() ? asAbsolute(root) : ''
+    return promptPreview(folder)
   })
   ipcMain.handle('agent:index', (_event, root: unknown) => refreshProjectIndex(asAbsolute(root)))
   ipcMain.handle('agent:sessions', (_event, root: unknown) => listSessions(asAbsolute(root)))
@@ -401,7 +406,18 @@ function agentRequest(raw: unknown): AgentRequest {
     model: row.model.trim(),
     session: row.session.trim(),
     files: contextFiles(row.files),
-    think: row.think === true
+    think: row.think === true,
+    extra: typeof row.extra === 'string' ? row.extra.trim().slice(0, 8000) : '',
+    caveman: row.caveman === true
+  }
+}
+
+function promptSettings(raw: unknown): { extra: string; caveman: boolean } {
+  if (!raw || typeof raw !== 'object') return { extra: '', caveman: false }
+  const row = raw as Record<string, unknown>
+  return {
+    extra: typeof row.extra === 'string' ? row.extra.trim().slice(0, 8000) : '',
+    caveman: row.caveman === true
   }
 }
 
