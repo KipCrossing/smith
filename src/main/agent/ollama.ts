@@ -38,6 +38,8 @@ export interface PromptOptions {
   think?: boolean
   temperature?: number
   numCtx?: number
+  numPredict?: number
+  keepAlive?: number
   onToken?: (channel: Channel, text: string) => void
   onUsage?: (promptTokens: number) => void
   signal?: AbortSignal
@@ -228,9 +230,11 @@ export async function chat(messages: ChatMessage[], options: PromptOptions = {})
     stream: true,
     options: {
       temperature: options.temperature ?? 0.2,
-      ...(options.numCtx && options.numCtx > 0 ? { num_ctx: options.numCtx } : {})
+      ...(options.numCtx && options.numCtx > 0 ? { num_ctx: options.numCtx } : {}),
+      ...(options.numPredict && options.numPredict > 0 ? { num_predict: options.numPredict } : {})
     }
   }
+  if (typeof options.keepAlive === 'number') body.keep_alive = options.keepAlive
   if (options.think) body.think = true
   if (options.tools) body.tools = options.tools
 
@@ -306,6 +310,46 @@ export async function chat(messages: ChatMessage[], options: PromptOptions = {})
   if (calls.length > 0) result.tool_calls = calls
   if (promptTokens > 0) options.onUsage?.(promptTokens)
   return result
+}
+
+export async function releaseGpu(keep: string | null): Promise<void> {
+  const host = ollamaHost()
+  let names: string[] = []
+  try {
+    const response = await fetch(`${host}/api/ps`, { signal: AbortSignal.timeout(8_000) })
+    if (!response.ok) return
+    const body = (await response.json()) as { models?: Array<{ name?: string; model?: string }> }
+    names = (body.models ?? []).flatMap((model) => {
+      const name = (typeof model.name === 'string' && model.name) || (typeof model.model === 'string' && model.model) || ''
+      return name ? [name] : []
+    })
+  } catch {
+    return
+  }
+  const held = keep?.trim() ?? ''
+  await Promise.all(names.filter((name) => name !== held).map(async (name) => {
+    try {
+      await fetch(`${host}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: name, keep_alive: 0 }),
+        signal: AbortSignal.timeout(30_000)
+      })
+    } catch {
+      // Unloading is best-effort. The voice model still needs the free memory.
+    }
+  }))
+}
+
+export async function warmModel(model: string, signal?: AbortSignal): Promise<void> {
+  await chat([{ role: 'user', content: 'Ready.' }], {
+    model,
+    temperature: 0,
+    numCtx: 4096,
+    numPredict: 1,
+    keepAlive: -1,
+    signal
+  })
 }
 
 function parseArguments(value: unknown): Record<string, unknown> {

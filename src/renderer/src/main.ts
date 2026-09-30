@@ -1,6 +1,7 @@
 import { EditorState } from '@codemirror/state'
 import type { FolderBuffer, GitSnapshot, MenuAction } from '../../shared/types'
 import { mountAgent } from './agent'
+import { mountAssistant } from './assistant'
 import { createEditor, type CursorStatus, type EditorController } from './editor'
 import { mountFindFolder } from './findFolder'
 import { mountDiffView } from './diffView'
@@ -71,6 +72,7 @@ app.innerHTML = `
     </section>
     <aside id="agent" class="agent" hidden></aside>
   </div>
+  <div id="assistant" class="assistant"></div>
   <div id="quick-open" class="quick-open hidden">
     <input id="quick-open-input" type="text" placeholder="Go to file" spellcheck="false" />
     <ul id="quick-open-list"></ul>
@@ -131,6 +133,10 @@ const editor: EditorController = createEditor(
   (cursor) => renderStatus(cursor)
 )
 
+const assistant = mountAssistant(mustGet('assistant'))
+const MODE_KEY = 'smith.mode'
+let mode: 'ide' | 'assistant' = localStorage.getItem(MODE_KEY) === 'assistant' ? 'assistant' : 'ide'
+
 const agent = mountAgent(
   mustGet('agent'),
   (text) => referenceForPaste(text, [terminal.selection(), editor.selectionReference(activeFile())]),
@@ -146,6 +152,7 @@ const agent = mountAgent(
 const appEl = document.querySelector('.app')
 if (!(appEl instanceof HTMLElement)) throw new Error('Missing .app')
 mountPanes(appEl, mustGet('sidebar-resize'), mustGet('agent-resize'))
+setMode(mode)
 
 const tree = mountTree(treeEl, {
   openFile: (file) => openFile(file),
@@ -251,6 +258,16 @@ window.addEventListener('keydown', (event) => {
   if (event.altKey && event.code === 'KeyA') {
     event.preventDefault()
     agent.toggle()
+    return
+  }
+  if (event.altKey && event.code === 'KeyS' && !event.shiftKey) {
+    event.preventDefault()
+    setMode(mode === 'assistant' ? 'ide' : 'assistant')
+    return
+  }
+  if (mode === 'assistant' && key === 's' && !event.altKey && !event.shiftKey) {
+    event.preventDefault()
+    assistant.save()
     return
   }
   if (event.shiftKey && !event.altKey && key === 'p') {
@@ -395,7 +412,24 @@ void (async () => {
 })()
 renderStatus()
 
+function setMode(next: 'ide' | 'assistant'): void {
+  mode = next
+  localStorage.setItem(MODE_KEY, next)
+  if (appEl instanceof HTMLElement) appEl.classList.toggle('mode-hidden', next === 'assistant')
+  assistant.setOpen(next === 'assistant')
+}
+
 function runMenuAction(action: MenuAction): void {
+  if (action === 'toggle-assistant') {
+    setMode(mode === 'assistant' ? 'ide' : 'assistant')
+    return
+  }
+  if (mode === 'assistant') {
+    if (action === 'save') assistant.save()
+    else if (action === 'find') assistant.find()
+    else if (action === 'command-palette') togglePalette()
+    return
+  }
   if (action === 'open-folder') void openFolder()
   else if (action === 'open-file') void openFileDialog()
   else if (action === 'save') void saveActive()
@@ -752,6 +786,8 @@ async function paletteCommands(): Promise<PaletteCommand[]> {
     },
     { label: 'Toggle Terminal', hint: 'Ctrl+`', run: () => terminal.toggle() },
     { label: 'Toggle Agent Panel', hint: 'Ctrl+Alt+A', run: () => agent.toggle() },
+    { label: 'Assistant', hint: 'Ctrl+Alt+S', run: () => setMode(mode === 'assistant' ? 'ide' : 'assistant') },
+    { label: 'Editor', run: () => setMode('ide') },
     { label: 'Focus Explorer', hint: 'Ctrl+Shift+E', run: () => { showSide('files'); tree.focus() } }
   ]
   for (const item of recent) {

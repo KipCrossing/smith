@@ -25,6 +25,7 @@ export type MenuAction =
   | 'prev-tab'
   | 'toggle-terminal'
   | 'toggle-agent'
+  | 'toggle-assistant'
   | 'new-file'
   | 'save-all'
   | 'goto-line'
@@ -243,6 +244,79 @@ export interface VoiceProgress {
   total: number
 }
 
+export type AssistantKind = 'text' | 'voice'
+
+export interface AssistantWhisperLine {
+  at: string
+  text: string
+}
+
+export interface AssistantSessionInfo {
+  id: string
+  created: string
+  updated: string
+  title: string
+  kind: AssistantKind
+}
+
+export interface AssistantTurn {
+  role: 'user' | 'assistant'
+  content: string
+  tools?: AgentTrace[]
+}
+
+export interface AssistantSession extends AssistantSessionInfo {
+  turns: AssistantTurn[]
+  heard: AssistantWhisperLine[]
+}
+
+export interface AssistantSessionState {
+  session: AssistantSession
+  sessions: AssistantSessionInfo[]
+  document: string
+}
+
+export interface AssistantSettings {
+  model: string
+  worker: string
+  think: boolean
+  extra: string
+}
+
+export const DEFAULT_ASSISTANT_WORKER = 'gemma3:4b'
+
+export interface AssistantTalkResult {
+  text: string
+  audio: Uint8Array
+}
+
+export type VoiceRuntime = 'missing' | 'cpu' | 'cuda' | 'external'
+
+export interface VoicechatStatus {
+  binary: boolean
+  binaryPath: string
+  weights: boolean
+  runtime: VoiceRuntime
+  note: string
+}
+
+export interface VoicechatProgress {
+  status: string
+  completed: number
+  total: number
+}
+
+export type AssistantEvent =
+  | { type: 'status'; text: string }
+  | { type: 'token'; channel: 'thinking' | 'content'; text: string }
+  | { type: 'clear-content' }
+  | { type: 'tool'; name: string; ok: boolean; detail: string }
+  | { type: 'thought'; seconds: number; text: string }
+  | { type: 'document'; text: string }
+  | { type: 'heard'; text: string }
+  | { type: 'done'; text: string }
+  | { type: 'error'; text: string }
+
 export type AgentEvent =
   | { type: 'status'; text: string }
   | { type: 'step'; index: number; total: number }
@@ -317,4 +391,22 @@ export interface EditorApi {
   runAgent: (request: AgentRequest) => Promise<AgentResult>
   stopAgent: () => Promise<void>
   onAgentEvent: (callback: (event: AgentEvent) => void) => () => void
+  listAssistantSessions: () => Promise<AssistantSessionState>
+  readAssistantSession: (id: string) => Promise<AssistantSessionState>
+  newAssistantSession: (kind: AssistantKind) => Promise<AssistantSessionState>
+  deleteAssistantSession: (id: string) => Promise<AssistantSessionState>
+  readAssistantDocument: (id: string) => Promise<string>
+  writeAssistantDocument: (id: string, contents: string) => Promise<void>
+  assistantPrompt: (extra: string) => Promise<string>
+  runAssistant: (id: string, text: string, settings: AssistantSettings) => Promise<string>
+  talkAssistant: (id: string, wav: ArrayBuffer, settings: AssistantSettings) => Promise<AssistantTalkResult>
+  prepareAssistantVoice: (id: string, settings: AssistantSettings) => Promise<void>
+  stopAssistant: () => Promise<void>
+  leaveAssistant: () => Promise<void>
+  onAssistantEvent: (callback: (event: AssistantEvent) => void) => () => void
+  voicechatStatus: () => Promise<VoicechatStatus>
+  downloadVoicechat: () => Promise<void>
+  setupVoicechat: (worker: string) => Promise<void>
+  cancelVoicechatDownload: () => Promise<void>
+  onVoicechatProgress: (callback: (progress: VoicechatProgress) => void) => () => void
 }

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { AgentEvent, AgentPromptSettings, EditorApi, MenuAction, ModelPullProgress, VoiceProgress } from '../shared/types'
+import type { AgentEvent, AgentPromptSettings, AssistantEvent, AssistantSettings, EditorApi, MenuAction, ModelPullProgress, VoicechatProgress, VoiceProgress } from '../shared/types'
 
 const api: EditorApi = {
   openFolder: () => ipcRenderer.invoke('dialog:open-folder'),
@@ -85,6 +85,32 @@ const api: EditorApi = {
     const listener = (_event: unknown, payload: AgentEvent): void => callback(payload)
     ipcRenderer.on('agent:event', listener)
     return () => ipcRenderer.removeListener('agent:event', listener)
+  },
+  listAssistantSessions: () => ipcRenderer.invoke('assistant:sessions'),
+  readAssistantSession: (id) => ipcRenderer.invoke('assistant:session-read', id),
+  newAssistantSession: (kind) => ipcRenderer.invoke('assistant:session-new', kind),
+  deleteAssistantSession: (id) => ipcRenderer.invoke('assistant:session-delete', id),
+  readAssistantDocument: (id) => ipcRenderer.invoke('assistant:document-read', id),
+  writeAssistantDocument: (id, contents) => ipcRenderer.invoke('assistant:document-write', id, contents),
+  assistantPrompt: (extra) => ipcRenderer.invoke('assistant:prompt', extra),
+  runAssistant: (id, text, settings: AssistantSettings) => ipcRenderer.invoke('assistant:run', id, text, settings),
+  talkAssistant: (id, wav, settings: AssistantSettings) => ipcRenderer.invoke('assistant:talk', id, wav, settings),
+  prepareAssistantVoice: (id, settings: AssistantSettings) => ipcRenderer.invoke('assistant:prepare', id, settings),
+  stopAssistant: () => ipcRenderer.invoke('assistant:stop'),
+  leaveAssistant: () => ipcRenderer.invoke('assistant:leave'),
+  onAssistantEvent: (callback) => {
+    const listener = (_event: unknown, payload: AssistantEvent): void => callback(payload)
+    ipcRenderer.on('assistant:event', listener)
+    return () => ipcRenderer.removeListener('assistant:event', listener)
+  },
+  voicechatStatus: () => ipcRenderer.invoke('assistant:voice-status'),
+  downloadVoicechat: () => ipcRenderer.invoke('assistant:voice-download'),
+  setupVoicechat: (worker) => ipcRenderer.invoke('assistant:voice-setup', worker),
+  cancelVoicechatDownload: () => ipcRenderer.invoke('assistant:voice-cancel'),
+  onVoicechatProgress: (callback) => {
+    const listener = (_event: unknown, progress: VoicechatProgress): void => callback(progress)
+    ipcRenderer.on('assistant:voice-progress', listener)
+    return () => ipcRenderer.removeListener('assistant:voice-progress', listener)
   }
 }
 

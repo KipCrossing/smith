@@ -521,9 +521,18 @@ async function runCommand(workspace: Workspace, args: Record<string, unknown>, s
 }
 
 async function webSearch(_workspace: Workspace, args: Record<string, unknown>): Promise<Execution> {
-  const query = text(args, 'query')
-  if (!query.trim()) throw new ToolError('query must not be empty')
-  const limit = Math.max(1, Math.min(10, integer(args, 'max_results', 5)))
+  const found = await searchWeb(text(args, 'query'), integer(args, 'max_results', 5))
+  return { result: { ok: true, query: found.query, results: found.results }, changed: [] }
+}
+
+export async function searchWeb(
+  query: string,
+  maxResults = 5,
+  signal?: AbortSignal
+): Promise<{ query: string; results: Array<{ title: string; url: string; snippet: string }> }> {
+  const cleaned = query.trim()
+  if (!cleaned) throw new ToolError('query must not be empty')
+  const limit = Math.max(1, Math.min(10, maxResults))
   let html = ''
   try {
     const response = await fetch('https://html.duckduckgo.com/html/', {
@@ -532,8 +541,8 @@ async function webSearch(_workspace: Workspace, args: Record<string, unknown>): 
         'Content-Type': 'application/x-www-form-urlencoded',
         'User-Agent': 'Mozilla/5.0 (compatible; smith/0.1)'
       },
-      body: new URLSearchParams({ q: query }),
-      signal: AbortSignal.timeout(20_000)
+      body: new URLSearchParams({ q: cleaned }),
+      signal: signal ? AbortSignal.any([AbortSignal.timeout(20_000), signal]) : AbortSignal.timeout(20_000)
     })
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
     html = await response.text()
@@ -556,11 +565,19 @@ async function webSearch(_workspace: Workspace, args: Record<string, unknown>): 
   if (results.length === 0) {
     throw new ToolError('no results parsed. DuckDuckGo’s HTML layout may have changed; this tool is best-effort and has no API key.')
   }
-  return { result: { ok: true, query, results }, changed: [] }
+  return { query: cleaned, results }
 }
 
 async function fetchUrl(_workspace: Workspace, args: Record<string, unknown>): Promise<Execution> {
-  const url = text(args, 'url')
+  const page = await fetchPage(text(args, 'url'), integer(args, 'max_chars', 8000))
+  return { result: { ok: true, ...page }, changed: [] }
+}
+
+export async function fetchPage(
+  url: string,
+  maxChars = 8000,
+  signal?: AbortSignal
+): Promise<{ url: string; content_type: string; chars: number; truncated: boolean; text: string }> {
   let parsed: URL
   try {
     parsed = new URL(url)
@@ -575,7 +592,7 @@ async function fetchUrl(_workspace: Workspace, args: Record<string, unknown>): P
   try {
     const response = await fetch(url, {
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; smith/0.1)' },
-      signal: AbortSignal.timeout(30_000)
+      signal: signal ? AbortSignal.any([AbortSignal.timeout(30_000), signal]) : AbortSignal.timeout(30_000)
     })
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
     contentType = response.headers.get('content-type') ?? ''
@@ -590,12 +607,9 @@ async function fetchUrl(_workspace: Workspace, args: Record<string, unknown>): P
   if (contentType.toLowerCase().includes('html') || head.startsWith('<!doctype') || head.startsWith('<html')) {
     textBody = htmlToText(textBody)
   }
-  const limit = Math.max(500, Math.min(integer(args, 'max_chars', 8000), 40_000))
+  const limit = Math.max(500, Math.min(maxChars, 40_000))
   const [extracted, clipped] = truncate(textBody, limit)
-  return {
-    result: { ok: true, url, content_type: contentType, chars: extracted.length, truncated: clipped, text: extracted },
-    changed: []
-  }
+  return { url, content_type: contentType, chars: extracted.length, truncated: clipped, text: extracted }
 }
 
 function checkCommand(command: string): void {
