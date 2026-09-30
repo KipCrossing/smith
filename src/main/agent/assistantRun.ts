@@ -1,30 +1,23 @@
 import path from 'path'
-import type { AgentTrace, AssistantEvent, AssistantSettings, AssistantTalkResult } from '../../shared/types'
+import type { AgentTrace, AssistantEvent, AssistantSettings } from '../../shared/types'
 import { contextLimit } from './budget'
-import { chat, releaseGpu, warmModel, type ChatMessage } from './ollama'
-import { assistantInstructions, voiceSystem } from './assistantPrompt'
+import { chat, type ChatMessage } from './ollama'
+import { assistantInstructions } from './assistantPrompt'
 import {
-  appendAssistantHeard,
   appendAssistantTurns,
   documentFile,
   readAssistantDocument,
   readAssistantSession
 } from './assistantSessions'
 import { AssistantTools } from './assistantTools'
-import { transcribeWav } from './voice'
-import { closeVoice, prepareVoice, voicePrepared, voiceTurn } from './voicechat'
 
 const TEXT_STEPS = 20
-const WORKER_STEPS = 12
 
 const runs = new Map<number, AbortController>()
 
 export function beginAssistant(id: number): AbortSignal {
   const previous = runs.get(id)
-  if (previous) {
-    previous.abort()
-    closeVoice()
-  }
+  if (previous) previous.abort()
   const controller = new AbortController()
   runs.set(id, controller)
   return controller.signal
@@ -32,27 +25,11 @@ export function beginAssistant(id: number): AbortSignal {
 
 export function stopAssistant(id: number): void {
   runs.get(id)?.abort()
-  closeVoice()
 }
 
 export function endAssistant(id: number, signal: AbortSignal): void {
   const current = runs.get(id)
   if (current?.signal === signal) runs.delete(id)
-}
-
-export async function prepareAssistantVoice(id: string, settings: AssistantSettings, signal: AbortSignal): Promise<void> {
-  const state = await readAssistantSession(id)
-  if (state.session.kind !== 'voice') return
-  const starting = !voicePrepared(state.session.id)
-  if (starting) await releaseGpu(null)
-  const system = voiceSystem(recap(state.session.turns), settings.extra)
-  await prepareVoice(state.session.id, system, signal)
-  if (!starting) return
-  try {
-    await warmModel(settings.worker, signal)
-  } catch {
-    // The voice can still talk. A missing worker is reported when work is requested.
-  }
 }
 
 export async function runAssistant(
@@ -65,19 +42,17 @@ export async function runAssistant(
   const task = text.trim()
   if (!task) throw new Error('Message is empty.')
   const state = await readAssistantSession(id)
-  if (state.session.kind !== 'text') throw new Error('This session listens by voice.')
   const dir = path.dirname(documentFile(state.session.id))
   const tools = new AssistantTools(dir, true)
   tools.signal = signal
   const answer = await loop(
     tools,
-    assistantInstructions('text', settings.extra),
+    assistantInstructions(settings.extra),
     task,
     state.session.turns.map((turn) => ({ role: turn.role, content: turn.content })),
     settings.model,
     settings.think,
     TEXT_STEPS,
-    false,
     state.session.id,
     emit,
     signal
@@ -93,77 +68,6 @@ export async function runAssistant(
 
 const traceLog = new WeakMap<object, AgentTrace[]>()
 
-export async function runTalk(
-  id: string,
-  wav: Buffer,
-  settings: AssistantSettings,
-  emit: (event: AssistantEvent) => void,
-  signal: AbortSignal
-): Promise<AssistantTalkResult> {
-  const state = await readAssistantSession(id)
-  if (state.session.kind !== 'voice') throw new Error('This session is typed.')
-  await prepareAssistantVoice(state.session.id, settings, signal)
-  const priorHeard = state.session.heard.map((line) => line.text)
-  let transcript = ''
-  const heard = transcribeWav(wav).then((text) => {
-    transcript = text.trim()
-    if (transcript) emit({ type: 'heard', text: transcript })
-    return transcript
-  }).catch(() => '')
-  let spoken = ''
-  emit({ type: 'clear-content' })
-  const turn = await voiceTurn(wav, (delta) => {
-    spoken += delta
-    emit({ type: 'token', channel: 'content', text: delta })
-  }, async (task) => {
-    emit({ type: 'status', text: 'Working' })
-    const said = await heard
-    const lines = [...priorHeard, said].filter((line) => line.trim()).slice(-8)
-    const brief = [
-      'What the user said:',
-      lines.length > 0 ? lines.map((line) => `- ${line}`).join('\n') : '(no transcript)',
-      '',
-      'The voice model thinks the task is:',
-      task.trim() || '(no task)',
-      '',
-      'Do the work. Put the lasting result in the document. Reply with two or three sentences that can be spoken aloud.'
-    ].join('\n')
-    const dir = path.dirname(documentFile(state.session.id))
-    const tools = new AssistantTools(dir, false)
-    tools.signal = signal
-    try {
-      const answer = await loop(
-        tools,
-        assistantInstructions('worker', settings.extra),
-        brief,
-        [],
-        settings.worker,
-        false,
-        WORKER_STEPS,
-        true,
-        state.session.id,
-        emit,
-        signal
-      )
-      emit({ type: 'status', text: '' })
-      return spokenSummary(answer)
-    } catch (error) {
-      if (signal.aborted) throw error
-      emit({ type: 'status', text: '' })
-      return 'I could not reach the worker model.'
-    }
-  }, signal)
-  const said = transcript || await heard
-  if (said) await appendAssistantHeard(state.session.id, said)
-  const reply = turn.text.trim() || spoken.trim()
-  await appendAssistantTurns(state.session.id, [
-    { role: 'user', content: said || '…' },
-    { role: 'assistant', content: reply || '…' }
-  ])
-  emit({ type: 'done', text: reply })
-  return { text: reply, audio: turn.audio }
-}
-
 async function loop(
   tools: AssistantTools,
   instructions: string,
@@ -172,7 +76,6 @@ async function loop(
   model: string,
   think: boolean,
   maxSteps: number,
-  quietTools: boolean,
   sessionId: string,
   emit: (event: AssistantEvent) => void,
   signal: AbortSignal
@@ -187,44 +90,56 @@ async function loop(
   traceLog.set(emit, traces)
   const limit = await contextLimit(model).catch(() => 0)
   let answer = ''
+  let plainTools = false
   for (let step = 1; step <= maxSteps; step += 1) {
     if (signal.aborted) throw new Error('Stopped.')
-    if (!quietTools) emit({ type: 'clear-content' })
+    emit({ type: 'clear-content' })
     emit({ type: 'status', text: `Step ${step}` })
-    const message = await chat(messages, {
-      model,
-      tools: schemas,
-      think,
-      temperature: 0.3,
-      numCtx: quietTools ? 4096 : limit > 0 ? Math.min(limit, 8192) : 8192,
-      keepAlive: -1,
-      signal,
-      onToken: quietTools ? undefined : (channel, text) => emit({ type: 'token', channel, text })
-    })
-    messages.push(message)
+    let message: ChatMessage
+    try {
+      message = await chat(messages, {
+        model,
+        tools: plainTools ? undefined : schemas,
+        think,
+        temperature: 0.3,
+        numCtx: limit > 0 ? Math.min(limit, 8192) : 8192,
+        keepAlive: -1,
+        signal,
+        onToken: (channel, text) => emit({ type: 'token', channel, text })
+      })
+    } catch (error) {
+      if (!plainTools && noToolSupport(error)) {
+        plainTools = true
+        messages[0] = { role: 'system', content: `${instructions}\n\n${plainToolGuide(schemas)}` }
+        step -= 1
+        continue
+      }
+      throw error
+    }
     if (message.thinking?.trim()) {
       const text = message.thinking.trim().slice(0, 40_000)
       traces.push({ kind: 'thought', seconds: message.thinkingSeconds || 1, text })
       emit({ type: 'thought', seconds: message.thinkingSeconds || 1, text })
     }
-    const calls = message.tool_calls ?? []
+    const calls = plainTools ? textToolCalls(message.content) : (message.tool_calls ?? []).map((call) => call.function)
     if (calls.length === 0) {
       answer = message.content.trim() || 'I do not have a reply.'
       break
     }
+    messages.push(message)
     for (const call of calls) {
       if (signal.aborted) throw new Error('Stopped.')
-      const name = call.function.name
-      const detail = detailOf(name, call.function.arguments)
+      const name = call.name
+      const detail = detailOf(name, call.arguments)
       emit({ type: 'status', text: labelOf(name, detail) })
-      const result = await tools.execute(name, call.function.arguments)
+      const result = await tools.execute(name, call.arguments)
       const ok = result.result.ok === true
-      if (!quietTools) {
-        traces.push({ kind: 'tool', name, ok, detail })
-        emit({ type: 'tool', name, ok, detail })
-      }
+      traces.push({ kind: 'tool', name, ok, detail })
+      emit({ type: 'tool', name, ok, detail })
       if (result.changed) emit({ type: 'document', text: await readAssistantDocument(sessionId) })
-      messages.push({ role: 'tool', tool_name: name, content: JSON.stringify(result.result) })
+      const payload = clipResult(result.result)
+      if (plainTools) messages.push({ role: 'user', content: `Result of ${name}:\n${payload}` })
+      else messages.push({ role: 'tool', tool_name: name, content: payload })
     }
     answer = ''
   }
@@ -236,15 +151,43 @@ function lastTraces(emit: (event: AssistantEvent) => void): AgentTrace[] {
   return traceLog.get(emit) ?? []
 }
 
-function spokenSummary(text: string): string {
-  const plain = text
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/[#>*_`[\]]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-  const sentences = plain.split(/(?<=[.!?])\s+/).filter(Boolean).slice(0, 3)
-  const joined = (sentences.length > 0 ? sentences.join(' ') : plain).slice(0, 500).trim()
-  return joined || 'I updated the document.'
+function noToolSupport(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /does not support tools/i.test(message)
+}
+
+function plainToolGuide(schemas: ReturnType<AssistantTools['schemas']>): string {
+  const lines = schemas.map((tool) => `- ${tool.function.name}: ${tool.function.description}`)
+  return [
+    'This model has no tool-calling API. To use a tool, reply with one JSON object and no other text:',
+    '{"tool":"tool_name","arguments":{}}',
+    'Tools:',
+    ...lines,
+    'When the work is done, reply in plain sentences and no JSON.'
+  ].join('\n')
+}
+
+function textToolCalls(content: string): Array<{ name: string; arguments: Record<string, unknown> }> {
+  const trimmed = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/```$/i, '').trim()
+  const start = trimmed.indexOf('{')
+  const end = trimmed.lastIndexOf('}')
+  if (start < 0 || end <= start) return []
+  const outside = `${trimmed.slice(0, start)}${trimmed.slice(end + 1)}`.replace(/```/g, '').trim()
+  if (outside.length > 40) return []
+  try {
+    const body = JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>
+    const name = typeof body.tool === 'string' ? body.tool : ''
+    const args = body.arguments
+    if (!name || !args || typeof args !== 'object' || Array.isArray(args)) return []
+    return [{ name, arguments: args as Record<string, unknown> }]
+  } catch {
+    return []
+  }
+}
+
+function clipResult(result: Record<string, unknown>): string {
+  const text = JSON.stringify(result)
+  return text.length > 2500 ? `${text.slice(0, 2500)}…` : text
 }
 
 function detailOf(name: string, args: Record<string, unknown> | undefined): string {
@@ -276,8 +219,4 @@ function labelOf(name: string, detail: string): string {
 
 function clip(text: string): string {
   return text.length > 160 ? `${text.slice(0, 159)}…` : text
-}
-
-function recap(turns: Array<{ role: string; content: string }>): string {
-  return turns.slice(-4).map((turn) => turn.content.trim().split('\n')[0] ?? '').filter(Boolean).join(' ')
 }

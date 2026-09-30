@@ -278,32 +278,8 @@ export interface AssistantSessionState {
 
 export interface AssistantSettings {
   model: string
-  worker: string
   think: boolean
   extra: string
-}
-
-export const DEFAULT_ASSISTANT_WORKER = 'gemma3:4b'
-
-export interface AssistantTalkResult {
-  text: string
-  audio: Uint8Array
-}
-
-export type VoiceRuntime = 'missing' | 'cpu' | 'cuda' | 'external'
-
-export interface VoicechatStatus {
-  binary: boolean
-  binaryPath: string
-  weights: boolean
-  runtime: VoiceRuntime
-  note: string
-}
-
-export interface VoicechatProgress {
-  status: string
-  completed: number
-  total: number
 }
 
 export type AssistantEvent =
@@ -313,7 +289,6 @@ export type AssistantEvent =
   | { type: 'tool'; name: string; ok: boolean; detail: string }
   | { type: 'thought'; seconds: number; text: string }
   | { type: 'document'; text: string }
-  | { type: 'heard'; text: string }
   | { type: 'done'; text: string }
   | { type: 'error'; text: string }
 
@@ -393,20 +368,12 @@ export interface EditorApi {
   onAgentEvent: (callback: (event: AgentEvent) => void) => () => void
   listAssistantSessions: () => Promise<AssistantSessionState>
   readAssistantSession: (id: string) => Promise<AssistantSessionState>
-  newAssistantSession: (kind: AssistantKind) => Promise<AssistantSessionState>
+  newAssistantSession: () => Promise<AssistantSessionState>
   deleteAssistantSession: (id: string) => Promise<AssistantSessionState>
   readAssistantDocument: (id: string) => Promise<string>
   writeAssistantDocument: (id: string, contents: string) => Promise<void>
   assistantPrompt: (extra: string) => Promise<string>
   runAssistant: (id: string, text: string, settings: AssistantSettings) => Promise<string>
-  talkAssistant: (id: string, wav: ArrayBuffer, settings: AssistantSettings) => Promise<AssistantTalkResult>
-  prepareAssistantVoice: (id: string, settings: AssistantSettings) => Promise<void>
   stopAssistant: () => Promise<void>
-  leaveAssistant: () => Promise<void>
   onAssistantEvent: (callback: (event: AssistantEvent) => void) => () => void
-  voicechatStatus: () => Promise<VoicechatStatus>
-  downloadVoicechat: () => Promise<void>
-  setupVoicechat: (worker: string) => Promise<void>
-  cancelVoicechatDownload: () => Promise<void>
-  onVoicechatProgress: (callback: (progress: VoicechatProgress) => void) => () => void
 }

@@ -42,10 +42,10 @@ export async function readAssistantSession(id: string): Promise<AssistantSession
   })
 }
 
-export async function createAssistantSession(kind: AssistantKind): Promise<AssistantSessionState> {
+export async function createAssistantSession(): Promise<AssistantSessionState> {
   return exclusive(async () => {
     const index = await loadIndex()
-    const session = emptySession(uniqueId(index.sessions.map((item) => item.id)), kind)
+    const session = emptySession(uniqueId(index.sessions.map((item) => item.id)), 'text')
     index.sessions.push(infoOf(session))
     index.active = session.id
     await writeSession(session)

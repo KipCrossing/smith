@@ -27,7 +27,7 @@ import { promptPreview } from './agent/prompt'
 import { refreshProjectIndex } from './agent/projectIndex'
 import { beginRun, endRun, runAgent, stopRun } from './agent/run'
 import { clearSession, createSession, forgetSessionFile, listSessions, readSession, rememberSessionFiles } from './agent/sessions'
-import { beginAssistant, endAssistant, prepareAssistantVoice, runAssistant, runTalk, stopAssistant } from './agent/assistantRun'
+import { beginAssistant, endAssistant, runAssistant, stopAssistant } from './agent/assistantRun'
 import {
   createAssistantSession,
   deleteAssistantSession,
@@ -37,7 +37,6 @@ import {
   writeAssistantDocument
 } from './agent/assistantSessions'
 import { textPreview } from './agent/assistantPrompt'
-import { closeVoice, downloadVoicechatWeights, setupVoicechat, voicechatStatus } from './agent/voicechat'
 import type { AgentRequest, AssistantSettings, FolderQuery, MenuAction } from '../shared/types'
 
 const RECENT_LIMIT = 8
@@ -389,10 +388,7 @@ function registerIpc(): void {
     if (typeof id !== 'string') throw new Error('Unknown session.')
     return readAssistantSession(id)
   })
-  ipcMain.handle('assistant:session-new', (_event, kind: unknown) => {
-    if (kind !== 'text' && kind !== 'voice') throw new Error('Choose text or voice.')
-    return createAssistantSession(kind)
-  })
+  ipcMain.handle('assistant:session-new', () => createAssistantSession())
   ipcMain.handle('assistant:session-delete', (_event, id: unknown) => {
     if (typeof id !== 'string') throw new Error('Unknown session.')
     return deleteAssistantSession(id)
@@ -406,24 +402,7 @@ function registerIpc(): void {
     await writeAssistantDocument(id, contents)
   })
   ipcMain.handle('assistant:prompt', (_event, extra: unknown) => textPreview(typeof extra === 'string' ? extra : ''))
-  const assistantPrepares = new Map<number, AbortController>()
-  ipcMain.handle('assistant:prepare', async (event, id: unknown, settings: unknown) => {
-    if (typeof id !== 'string') throw new Error('Unknown session.')
-    assistantPrepares.get(event.sender.id)?.abort()
-    const controller = new AbortController()
-    assistantPrepares.set(event.sender.id, controller)
-    try {
-      await prepareAssistantVoice(id, assistantSettings(settings), controller.signal)
-    } finally {
-      if (assistantPrepares.get(event.sender.id) === controller) assistantPrepares.delete(event.sender.id)
-    }
-  })
   ipcMain.handle('assistant:stop', (event) => {
-    assistantPrepares.get(event.sender.id)?.abort()
-    stopAssistant(event.sender.id)
-  })
-  ipcMain.handle('assistant:leave', (event) => {
-    assistantPrepares.get(event.sender.id)?.abort()
     stopAssistant(event.sender.id)
   })
   ipcMain.handle('assistant:run', async (event, id: unknown, text: unknown, settings: unknown) => {
@@ -441,59 +420,6 @@ function registerIpc(): void {
       event.sender.removeListener('destroyed', onGone)
       endAssistant(event.sender.id, signal)
     }
-  })
-  ipcMain.handle('assistant:talk', async (event, id: unknown, wav: unknown, settings: unknown) => {
-    if (typeof id !== 'string') throw new Error('Unknown session.')
-    const bytes = audioBytes(wav)
-    if (!bytes) throw new Error('The recording was empty.')
-    const signal = beginAssistant(event.sender.id)
-    const onGone = (): void => stopAssistant(event.sender.id)
-    event.sender.once('destroyed', onGone)
-    const emit = (payload: unknown): void => {
-      if (!event.sender.isDestroyed()) event.sender.send('assistant:event', payload)
-    }
-    try {
-      return await runTalk(id, bytes, assistantSettings(settings), emit, signal)
-    } finally {
-      event.sender.removeListener('destroyed', onGone)
-      endAssistant(event.sender.id, signal)
-    }
-  })
-  ipcMain.handle('assistant:voice-status', () => voicechatStatus())
-  const voicechatDownloads = new Map<number, AbortController>()
-  ipcMain.handle('assistant:voice-setup', async (event, worker: unknown) => {
-    const name = typeof worker === 'string' && worker.trim() ? worker.trim() : 'gemma3:4b'
-    voicechatDownloads.get(event.sender.id)?.abort()
-    const controller = new AbortController()
-    voicechatDownloads.set(event.sender.id, controller)
-    const onGone = (): void => controller.abort()
-    event.sender.once('destroyed', onGone)
-    try {
-      await setupVoicechat(name, (progress) => {
-        if (!event.sender.isDestroyed()) event.sender.send('assistant:voice-progress', progress)
-      }, controller.signal)
-    } finally {
-      event.sender.removeListener('destroyed', onGone)
-      if (voicechatDownloads.get(event.sender.id) === controller) voicechatDownloads.delete(event.sender.id)
-    }
-  })
-  ipcMain.handle('assistant:voice-download', async (event) => {
-    voicechatDownloads.get(event.sender.id)?.abort()
-    const controller = new AbortController()
-    voicechatDownloads.set(event.sender.id, controller)
-    const onGone = (): void => controller.abort()
-    event.sender.once('destroyed', onGone)
-    try {
-      await downloadVoicechatWeights((progress) => {
-        if (!event.sender.isDestroyed()) event.sender.send('assistant:voice-progress', progress)
-      }, controller.signal)
-    } finally {
-      event.sender.removeListener('destroyed', onGone)
-      if (voicechatDownloads.get(event.sender.id) === controller) voicechatDownloads.delete(event.sender.id)
-    }
-  })
-  ipcMain.handle('assistant:voice-cancel', (event) => {
-    voicechatDownloads.get(event.sender.id)?.abort()
   })
 }
 
@@ -573,10 +499,8 @@ function assistantSettings(raw: unknown): AssistantSettings {
   if (!raw || typeof raw !== 'object') throw new Error('Choose a model.')
   const row = raw as Record<string, unknown>
   if (typeof row.model !== 'string' || !row.model.trim()) throw new Error('Choose a model.')
-  if (typeof row.worker !== 'string' || !row.worker.trim()) throw new Error('Choose a worker model.')
   return {
     model: row.model.trim(),
-    worker: row.worker.trim(),
     think: row.think === true,
     extra: typeof row.extra === 'string' ? row.extra.trim().slice(0, 8000) : ''
   }
@@ -627,7 +551,6 @@ app.on('before-quit', () => {
   stopAllTerminals()
   stopSpeaking()
   stopWhisper()
-  closeVoice()
 })
 
 app.on('window-all-closed', () => {

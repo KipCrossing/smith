@@ -19,42 +19,14 @@ Use web_search to look things up. Results are titles, URLs, and snippets. When a
 
 When you are done, write a short reply in complete sentences. The document holds the long form. The reply says what you found or what changed on the page.`
 
-const WORKER = `You do one task for a voice assistant. The user cannot see this conversation. They hear a short reply, and they see the working document.
-
-Today's date: {today}
-
-The transcript is what the user said. The task line is the voice model's guess. When they disagree, trust the transcript for names, numbers, dates, and wording.
-
-Read the document before you change it.
-- Use edit_document for a change inside the page.
-- Use append_document to add a section at the end.
-- Do not overwrite the whole page.
-
-Use web_search for facts you were asked to look up. When a snippet is not enough, call fetch_url. Do not invent sources.
-
-When the work is done, stop calling tools. Reply with two or three plain sentences that can be spoken aloud. No markdown, no lists, no headings. The document holds the detail.`
-
-export const VOICE_SYSTEM = `You are a conversational assistant. Speak naturally and briefly. For research or changes to the working document, call askTextAgent once with a one-sentence task. Otherwise just reply. Do not invent search results.
-
-<AVAILABLE_TOOLS>[{"name":"askTextAgent","parameters":{"task":"string"}}]</AVAILABLE_TOOLS>`
-
-export function assistantInstructions(kind: 'text' | 'worker', extra: string): string {
-  const base = fill(kind === 'worker' ? WORKER : TEXT, { today: new Date().toISOString().slice(0, 10) })
+export function assistantInstructions(extra: string): string {
+  const base = fill(TEXT, { today: new Date().toISOString().slice(0, 10) })
   const note = extra.trim().slice(0, EXTRA_LIMIT)
   return note ? `${base}\n\n## Additional instructions\n\n${note}` : base
 }
 
-export function voiceSystem(recap: string, extra: string): string {
-  const parts = [VOICE_SYSTEM]
-  const memory = recap.trim().replace(/\s+/g, ' ').slice(0, 400)
-  const note = extra.trim().replace(/\s+/g, ' ').slice(0, 200)
-  if (memory) parts.push(`Earlier in this session: ${memory}`)
-  if (note) parts.push(note)
-  return parts.join('\n\n')
-}
-
 export function textPreview(extra: string): string {
-  return assistantInstructions('text', extra)
+  return assistantInstructions(extra)
 }
 
 function fill(template: string, values: Record<string, string>): string {

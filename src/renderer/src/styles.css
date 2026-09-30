@@ -81,22 +81,16 @@ button {
 }
 
 .assistant-new-text,
-.assistant-new-voice,
 .assistant-stop,
-.assistant-setup,
-.assistant-doc-edit,
-.assistant-talk-button {
+.assistant-doc-edit {
   padding: 2px 8px;
   border-radius: 4px;
   background: #2c313a;
 }
 
 .assistant-new-text:hover,
-.assistant-new-voice:hover,
 .assistant-stop:hover,
-.assistant-setup:hover,
-.assistant-doc-edit:hover,
-.assistant-talk-button:hover {
+.assistant-doc-edit:hover {
   background: #3e4451;
 }
 
@@ -131,11 +125,6 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.assistant-session-kind {
-  color: #5c6370;
-  font-size: 11px;
 }
 
 .assistant-session-delete {
@@ -175,30 +164,6 @@ button {
   min-height: 44px;
 }
 
-.assistant-talk {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px;
-}
-
-.assistant-talk[hidden] {
-  display: none;
-}
-
-.assistant-talk-button {
-  align-self: flex-start;
-}
-
-.assistant-talk-note {
-  margin: 0;
-  color: #e5c07b;
-}
-
-.assistant-talk-note:empty {
-  display: none;
-}
-
 .assistant-doc {
   display: flex;
   flex-direction: column;
@@ -228,67 +193,13 @@ button {
 .assistant-doc-view .agent-md-h3 { font-size: 15px; }
 .assistant-doc-view .agent-md-h4 { font-size: 13px; }
 
-.assistant-input[hidden],
-.assistant-composer .agent-composer-bar[hidden] {
-  display: none;
-}
-
-.assistant-setup-list {
-  margin: 8px 0 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.assistant-step {
-  position: relative;
-  padding-left: 16px;
-  color: #abb2bf;
-  font-size: 13px;
-}
-
-.assistant-step::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0.45em;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #5c6370;
-}
-
-.assistant-step.ready {
-  color: #98c379;
-}
-
-.assistant-step.ready::before {
-  background: #98c379;
-}
-
 .assistant-settings {
   position: absolute;
   z-index: 3;
   inset: 36px 8px 8px;
 }
 
-.assistant-voice-note,
-.assistant-pull-note {
-  margin: 8px 0 0;
-  color: #abb2bf;
-}
-
-.assistant-voice-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.assistant-model,
-.assistant-worker {
+.assistant-model {
   width: 100%;
   color: inherit;
   background: #21252b;
